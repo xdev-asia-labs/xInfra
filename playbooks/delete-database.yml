@@ -1,11 +1,11 @@
 ---
-# Playbook xóa databases từ PostgreSQL cluster
+# Playbook delete databases from PostgreSQL cluster
 #
-# Sử dụng:
+# Usage:
 #   set -a && source .env && set +a
 #   ansible-playbook playbooks/delete-database.yml -i inventory/hosts.yml -e "databases_to_delete=['db1','db2']"
 #
-# Ví dụ:
+# Example:
 #   ansible-playbook playbooks/delete-database.yml -i inventory/hosts.yml -e "databases_to_delete=['identity_integration','integration_gateway']"
 
 - name: Delete PostgreSQL Databases

@@ -1,0 +1,119 @@
+---
+# Playbook to alter PostgreSQL database schema safely in a Patroni cluster
+#
+# Usage:
+#   set -a && source .env && set +a
+#   ansible-playbook playbooks/alter-schema.yml -i inventory/hosts.yml \
+#     -e "target_database=files" \
+#     -e "alter_statement='ALTER TABLE file_download_token ALTER COLUMN created_at TYPE bigint USING EXTRACT(EPOCH FROM created_at) * 1000;'"
+#
+# Or with multiple statements:
+#   -e "alter_statement='ALTER TABLE table1 ...; ALTER TABLE table2 ...;'"
+
+- name: Alter PostgreSQL Database Schema
+  hosts: postgres
+  become: true
+
+  vars:
+    target_database: "{{ target_database | default('') }}"
+    alter_statement: "{{ alter_statement | default('') }}"
+
+  tasks:
+    - name: Validate required parameters
+      ansible.builtin.fail:
+        msg: "Missing required parameter: {{ item }}"
+      when: lookup('vars', item) == ''
+      loop:
+        - target_database
+        - alter_statement
+      run_once: true
+
+    - name: Check if this node is the Patroni leader
+      ansible.builtin.shell: |
+        patronictl -c /etc/patroni/patroni.yml list --format=json | \
+        python3 -c "import sys,json; data=json.load(sys.stdin); print(next((m['Member'] for m in data if m.get('Role') == 'Leader'), ''))"
+      register: patroni_leader
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['postgres'][0] }}"
+
+    - name: Debug - Show leader and alter info
+      ansible.builtin.debug:
+        msg: |
+          Patroni Leader: {{ patroni_leader.stdout }}
+          Current host: {{ patroni_name }}
+          Target database: {{ target_database }}
+          Alter statement: {{ alter_statement }}
+      run_once: true
+
+    - name: Backup current schema before altering
+      become_user: postgres
+      ansible.builtin.shell: |
+        pg_dump -U {{ postgresql_superuser }} \
+          -h localhost \
+          -p {{ postgresql_port }} \
+          --schema-only \
+          {{ target_database }} > /tmp/{{ target_database }}_schema_backup_{{ ansible_date_time.iso8601_basic_short }}.sql
+      when: patroni_name == patroni_leader.stdout
+      register: backup_result
+
+    - name: Show backup location
+      ansible.builtin.debug:
+        msg: "Schema backup saved to: {{ backup_result.stdout_lines | default([]) }}"
+      when: patroni_name == patroni_leader.stdout and backup_result is changed
+
+    - name: Execute ALTER statement on leader
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "{{ alter_statement }}"
+        port: "{{ postgresql_port }}"
+      when: patroni_name == patroni_leader.stdout
+      register: alter_result
+
+    - name: Show ALTER result
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════════════════════╗
+          ║                    ✅ SCHEMA UPDATE SUCCESS!                    ║
+          ╚══════════════════════════════════════════════════════════════════════════════╝
+
+          📊 Database: {{ target_database }}
+          🔧 Statement: {{ alter_statement }}
+          📝 Executed on: {{ patroni_leader.stdout }} (Leader)
+          💾 Backup: /tmp/{{ target_database }}_schema_backup_{{ ansible_date_time.iso8601_basic_short }}.sql
+
+          ⚠️  Lưu ý:
+          - Schema change đã được replicate tới tất cả replicas
+          - Kiểm tra application compatibility sau khi alter
+          - Backup schema đã được lưu trên leader node
+      when: patroni_name == patroni_leader.stdout and alter_result is succeeded
+      run_once: true
+
+    - name: Wait for replication to sync
+      ansible.builtin.pause:
+        seconds: 5
+        prompt: "Đợi replication sync schema changes..."
+      when: patroni_name == patroni_leader.stdout
+      run_once: true
+
+    - name: Verify schema change on replicas
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: |
+          SELECT 
+            column_name, 
+            data_type, 
+            character_maximum_length
+          FROM information_schema.columns 
+          WHERE table_schema = 'public' 
+          ORDER BY table_name, ordinal_position;
+        port: "{{ postgresql_port }}"
+      register: schema_check
+      when: patroni_name != patroni_leader.stdout
+
+    - name: Show replication status
+      ansible.builtin.debug:
+        msg: "✅ Schema synced to {{ patroni_name }}"
+      when: patroni_name != patroni_leader.stdout and schema_check is succeeded

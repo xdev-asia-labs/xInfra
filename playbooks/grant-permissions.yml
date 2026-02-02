@@ -1,0 +1,132 @@
+---
+# Playbook grant permissions for database users
+#
+# Usage:
+#   set -a && source .env && set +a
+#   ansible-playbook playbooks/grant-permissions.yml -i inventory/hosts.yml \
+#     -e "target_database=identity" \
+#     -e "target_user=identity_user"
+#
+# Grant for multiple users:
+#   -e "target_users=identity_user,files_user"
+
+- name: Grant PostgreSQL Database Permissions
+  hosts: postgres
+  become: true
+
+  tasks:
+    - name: Validate required parameters
+      ansible.builtin.fail:
+        msg: "Missing required parameter: target_database and (target_user or target_users)"
+      when: target_database is not defined or (target_user is not defined and target_users is not defined)
+      run_once: true
+
+    - name: Set users list
+      ansible.builtin.set_fact:
+        users_list: "{{ target_users.split(',') if target_users is defined else [target_user] }}"
+      run_once: true
+
+    - name: Check if this node is the Patroni leader
+      ansible.builtin.shell: |
+        patronictl -c /etc/patroni/patroni.yml list --format=json | \
+        python3 -c "import sys,json; data=json.load(sys.stdin); print(next((m['Member'] for m in data if m.get('Role') == 'Leader'), ''))"
+      register: patroni_leader
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['postgres'][0] }}"
+
+    - name: Debug - Show grant info
+      ansible.builtin.debug:
+        msg: |
+          Patroni Leader: {{ patroni_leader.stdout }}
+          Current host: {{ patroni_name }}
+          Target database: {{ target_database }}
+          Target users: {{ users_list }}
+      run_once: true
+
+    - name: Grant ALL privileges on all tables
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ item }};"
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Grant ALL privileges on all sequences
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ item }};"
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Grant USAGE on schema public
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "GRANT USAGE ON SCHEMA public TO {{ item }};"
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Set default privileges for future tables
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ item }};"
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Set default privileges for future sequences
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ item }};"
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Verify granted permissions
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ target_database }}"
+        query: |
+          SELECT 
+            grantee,
+            privilege_type,
+            COUNT(*) as table_count
+          FROM information_schema.table_privileges
+          WHERE table_schema = 'public' 
+            AND grantee = '{{ item }}'
+          GROUP BY grantee, privilege_type
+          ORDER BY privilege_type;
+        port: "{{ postgresql_port }}"
+      loop: "{{ users_list }}"
+      register: permissions_check
+      when: patroni_name == patroni_leader.stdout
+
+    - name: Show granted permissions
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════════════════════╗
+          ║                    ✅ PERMISSIONS GRANTED SUCCESSFULLY!                      ║
+          ╚══════════════════════════════════════════════════════════════════════════════╝
+
+          📊 Database: {{ target_database }}
+          👥 Users: {{ users_list | join(', ') }}
+          📝 Executed on: {{ patroni_leader.stdout }} (Leader)
+
+          ✅ Granted:
+          - ALL privileges on existing tables
+          - ALL privileges on existing sequences
+          - USAGE on schema public
+          - Default privileges for future tables/sequences
+
+          ⚠️  Lưu ý:
+          - Permissions sussessfully granted to specified users
+          - Future tables/sequences automatically inherit privileges
+      when: patroni_name == patroni_leader.stdout
+      run_once: true
