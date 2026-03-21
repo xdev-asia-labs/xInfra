@@ -438,7 +438,7 @@ SELECT count(*) FROM pg_stat_activity
 WHERE state = 'idle in transaction failed';
 ```
 
-2. **Kết nối superuser**:
+1. **Kết nối superuser**:
 
 ```sql
 SELECT usename, client_addr, backend_start 
@@ -446,7 +446,7 @@ FROM pg_stat_activity
 WHERE usesysid = 10;
 ```
 
-3. **Tỷ lệ kết nối SSL**:
+1. **Tỷ lệ kết nối SSL**:
 
 ```sql
 SELECT 
@@ -455,7 +455,7 @@ SELECT
 FROM pg_stat_ssl;
 ```
 
-4. **Sự kiện failover Patroni**:
+1. **Sự kiện failover Patroni**:
 
 ```bash
 journalctl -u patroni | grep -i "failover"
@@ -483,7 +483,7 @@ psql -U postgres -c "ALTER USER replicator PASSWORD '<mật_khẩu_mới>';"
 psql -U postgres -c "ALTER USER admin PASSWORD '<mật_khẩu_mới>';"
 ```
 
-2. **Kiểm tra kết nối**:
+1. **Kiểm tra kết nối**:
 
 ```sql
 SELECT pid, usename, client_addr, backend_start, state 
@@ -491,7 +491,7 @@ FROM pg_stat_activity
 WHERE client_addr IS NOT NULL;
 ```
 
-3. **Ngắt kết nối đáng ngờ**:
+1. **Ngắt kết nối đáng ngờ**:
 
 ```sql
 SELECT pg_terminate_backend(pid) 
@@ -499,14 +499,14 @@ FROM pg_stat_activity
 WHERE client_addr = '<ip_đáng_ngờ>';
 ```
 
-4. **Kiểm tra audit log**:
+1. **Kiểm tra audit log**:
 
 ```bash
 grep -i "authentication failed" /var/log/postgresql/*.log
 grep -i "FATAL" /var/log/postgresql/*.log
 ```
 
-5. **Tạm thời bật log kết nối**:
+1. **Tạm thời bật log kết nối**:
 
 ```sql
 ALTER SYSTEM SET log_connections = 'on';
