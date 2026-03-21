@@ -420,6 +420,7 @@ ansible-playbook playbooks/create-database.yml -i inventory/hosts.yml
 ```
 
 Playbook sẽ:
+
 - Tạo database users với mật khẩu bảo mật
 - Tạo databases với owner được chỉ định
 - Cấp toàn bộ quyền trên databases
@@ -599,7 +600,7 @@ ssh root@10.0.0.11 "tail -f /var/log/pgbouncer/pgbouncer.log"
 
 ```bash
 # Kiểm tra tất cả dịch vụ trên một node
-ssh root@172.23.202.11 "
+ssh root@$NODE1_IP "
   systemctl status postgresql@18-main
   systemctl status patroni
   systemctl status etcd

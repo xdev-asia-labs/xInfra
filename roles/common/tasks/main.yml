@@ -62,7 +62,7 @@
 # =============================================================================
 - name: Set hostname
   hostname:
-    name: "{{ inventory_hostname }}"
+    name: "{{ target_hostname | default(inventory_hostname) }}"
 
 - name: Update /etc/hosts
   template:
@@ -177,6 +177,41 @@
     - firewall_type | default('ufw') == 'ufw'
     - "'postgres' in group_names"
 
+- name: Configure UFW - Allow PgBouncer
+  ufw:
+    rule: allow
+    src: "{{ cluster_network }}"
+    port: "{{ pgbouncer_listen_port | default(6432) }}"
+    proto: tcp
+  when:
+    - firewall_enabled | default(true)
+    - firewall_type | default('ufw') == 'ufw'
+    - "'postgres' in group_names"
+
+- name: Configure UFW - Allow Node Exporter
+  ufw:
+    rule: allow
+    src: "{{ cluster_network }}"
+    port: "{{ node_exporter_port | default(9100) }}"
+    proto: tcp
+  when:
+    - firewall_enabled | default(true)
+    - firewall_type | default('ufw') == 'ufw'
+
+- name: Configure UFW - Allow SSH from pgBackRest backup server
+  ufw:
+    rule: allow
+    src: "{{ hostvars[groups['backup'][0]]['ansible_host'] }}"
+    port: "22"
+    proto: tcp
+  when:
+    - firewall_enabled | default(true)
+    - firewall_type | default('ufw') == 'ufw'
+    - "'postgres' in group_names"
+    - pgbackrest_enabled | default(false)
+    - groups['backup'] is defined
+    - groups['backup'] | length > 0
+
 - name: Enable UFW
   ufw:
     state: enabled
@@ -250,6 +285,24 @@
     - firewall_enabled | default(true)
     - firewall_type | default('ufw') == 'firewalld'
     - "'postgres' in group_names"
+
+- name: Configure firewalld - Allow SSH from pgBackRest backup server
+  firewalld:
+    rich_rule: >-
+      rule family="ipv4"
+      source address="{{ hostvars[groups['backup'][0]]['ansible_host'] }}/32"
+      port port="22" protocol="tcp"
+      accept
+    permanent: yes
+    state: enabled
+    immediate: yes
+  when:
+    - firewall_enabled | default(true)
+    - firewall_type | default('ufw') == 'firewalld'
+    - "'postgres' in group_names"
+    - pgbackrest_enabled | default(false)
+    - groups['backup'] is defined
+    - groups['backup'] | length > 0
 
 # =============================================================================
 # SYSTEM TUNING

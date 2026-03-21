@@ -1,0 +1,362 @@
+---
+# pgBackRest Role - Install and configure pgBackRest for PostgreSQL backup
+#
+# This role handles:
+#   - Installing pgBackRest on both backup server and PG nodes
+#   - Configuring pgbackrest.conf on all hosts
+#   - Setting up SSH key-based auth between backup server <-> PG nodes
+#   - Creating and verifying the backup stanza
+#   - Setting up cron schedules for automated backups
+
+# =============================================================================
+# INSTALL PGBACKREST (from PGDG repo for consistent versioning)
+# =============================================================================
+- name: Add PostgreSQL PGDG apt key (backup server)
+  shell: |
+    if [ ! -f /usr/share/keyrings/postgresql-archive-keyring.gpg ]; then
+      curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | \
+        gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+      echo "ADDED"
+    else
+      echo "EXISTS"
+    fi
+  register: pgdg_key
+  changed_when: "'ADDED' in pgdg_key.stdout"
+  when:
+    - ansible_os_family == "Debian"
+    - "'backup' in group_names"
+
+- name: Add PostgreSQL PGDG apt repository (backup server)
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    filename: pgdg
+    state: present
+  when:
+    - ansible_os_family == "Debian"
+    - "'backup' in group_names"
+
+- name: Install pgBackRest (Debian/Ubuntu)
+  apt:
+    name: pgbackrest
+    state: latest
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install pgBackRest (RedHat)
+  dnf:
+    name: pgbackrest
+    state: present
+  when: ansible_os_family == "RedHat"
+
+# =============================================================================
+# CREATE PGBACKREST USER ON BACKUP SERVER (must be before directory creation)
+# =============================================================================
+- name: Create pgbackrest system user (backup server only)
+  user:
+    name: pgbackrest
+    system: yes
+    home: /home/pgbackrest
+    shell: /bin/bash
+    create_home: yes
+  when: "'backup' in group_names"
+
+# =============================================================================
+# CREATE DIRECTORIES
+# =============================================================================
+- name: Create pgBackRest directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ 'postgres' if 'postgres' in group_names else 'pgbackrest' }}"
+    group: "{{ 'postgres' if 'postgres' in group_names else 'pgbackrest' }}"
+    mode: "0750"
+  loop:
+    - "{{ pgbackrest_config_dir }}"
+    - "{{ pgbackrest_log_path }}"
+    - "{{ pgbackrest_spool_path }}"
+
+- name: Create pgBackRest repository directory (backup server only)
+  file:
+    path: "{{ pgbackrest_repo_path }}"
+    state: directory
+    owner: pgbackrest
+    group: pgbackrest
+    mode: "0750"
+  when: "'backup' in group_names"
+
+# =============================================================================
+# SSH KEY SETUP
+# =============================================================================
+- name: Create .ssh directory for pgbackrest user (backup server)
+  file:
+    path: /home/pgbackrest/.ssh
+    state: directory
+    owner: pgbackrest
+    group: pgbackrest
+    mode: "0700"
+  when: "'backup' in group_names"
+
+- name: Generate SSH key for pgbackrest user (backup server)
+  community.crypto.openssh_keypair:
+    path: /home/pgbackrest/.ssh/id_ed25519
+    type: ed25519
+    owner: pgbackrest
+    group: pgbackrest
+    comment: "pgbackrest@{{ inventory_hostname }}"
+  register: pgbackrest_ssh_key
+  when: "'backup' in group_names"
+
+- name: Read pgbackrest public key from backup server
+  slurp:
+    src: /home/pgbackrest/.ssh/id_ed25519.pub
+  register: pgbackrest_pubkey
+  when: "'backup' in group_names"
+
+- name: Set pgbackrest public key fact
+  set_fact:
+    pgbackrest_public_key: "{{ pgbackrest_pubkey.content | b64decode | trim }}"
+  when: "'backup' in group_names"
+
+- name: Create .ssh directory for postgres user (PG nodes)
+  file:
+    path: /var/lib/postgresql/.ssh
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+  when: "'postgres' in group_names"
+
+- name: Generate SSH key for postgres user (PG nodes)
+  community.crypto.openssh_keypair:
+    path: /var/lib/postgresql/.ssh/id_ed25519
+    type: ed25519
+    owner: postgres
+    group: postgres
+    comment: "postgres@{{ inventory_hostname }}"
+  register: postgres_ssh_key
+  when: "'postgres' in group_names"
+
+- name: Read postgres public key from PG nodes
+  slurp:
+    src: /var/lib/postgresql/.ssh/id_ed25519.pub
+  register: postgres_pubkey
+  when: "'postgres' in group_names"
+
+- name: Authorize pgbackrest key on PG nodes (postgres user)
+  authorized_key:
+    user: postgres
+    key: "{{ hostvars[groups['backup'][0]]['pgbackrest_public_key'] }}"
+    state: present
+  when: "'postgres' in group_names"
+
+- name: Authorize postgres keys on backup server (pgbackrest user)
+  authorized_key:
+    user: pgbackrest
+    key: "{{ hostvars[item]['postgres_pubkey']['content'] | b64decode | trim }}"
+    state: present
+  loop: "{{ groups['postgres'] }}"
+  when: "'backup' in group_names"
+
+- name: Configure SSH known_hosts for pgbackrest user (backup server → PG nodes)
+  shell: |
+    HOST="{{ hostvars[item]['ansible_host'] }}"
+    KNOWNHOSTS="/home/pgbackrest/.ssh/known_hosts"
+    touch "$KNOWNHOSTS"
+    if ! grep -qF "$HOST" "$KNOWNHOSTS" 2>/dev/null; then
+      ssh-keyscan -t rsa,ecdsa,ed25519 -H "$HOST" 2>/dev/null >> "$KNOWNHOSTS"
+      echo "ADDED: $HOST"
+    else
+      echo "EXISTS: $HOST"
+    fi
+  loop: "{{ groups['postgres'] }}"
+  when: "'backup' in group_names"
+  become_user: pgbackrest
+  register: keyscan_result
+  changed_when: "'ADDED' in keyscan_result.stdout"
+
+- name: Ensure known_hosts permissions (backup server)
+  file:
+    path: /home/pgbackrest/.ssh/known_hosts
+    owner: pgbackrest
+    group: pgbackrest
+    mode: "0600"
+  when:
+    - "'backup' in group_names"
+
+- name: Configure SSH known_hosts for postgres user (PG nodes → backup server)
+  shell: |
+    HOST="{{ hostvars[groups['backup'][0]]['ansible_host'] }}"
+    KNOWNHOSTS="/var/lib/postgresql/.ssh/known_hosts"
+    touch "$KNOWNHOSTS"
+    if ! grep -qF "$HOST" "$KNOWNHOSTS" 2>/dev/null; then
+      ssh-keyscan -t rsa,ecdsa,ed25519 -H "$HOST" 2>/dev/null >> "$KNOWNHOSTS"
+      echo "ADDED: $HOST"
+    else
+      echo "EXISTS: $HOST"
+    fi
+  when: "'postgres' in group_names"
+  become_user: postgres
+  register: keyscan_pg_result
+  changed_when: "'ADDED' in keyscan_pg_result.stdout"
+
+- name: Ensure known_hosts permissions (PG nodes)
+  file:
+    path: /var/lib/postgresql/.ssh/known_hosts
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  when:
+    - "'postgres' in group_names"
+
+# =============================================================================
+# VALIDATE SSH CONNECTIVITY
+# =============================================================================
+- name: Test SSH from backup server to each PG node
+  shell: |
+    ssh -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=15 \
+        -i /home/pgbackrest/.ssh/id_ed25519 \
+        postgres@{{ hostvars[item]['ansible_host'] }} \
+        "echo OK"
+  loop: "{{ groups['postgres'] }}"
+  when: "'backup' in group_names"
+  become_user: pgbackrest
+  register: ssh_test_backup
+  changed_when: false
+  failed_when: ssh_test_backup.rc != 0
+
+- name: Test SSH from PG nodes to backup server
+  shell: |
+    ssh -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=15 \
+        -i /var/lib/postgresql/.ssh/id_ed25519 \
+        pgbackrest@{{ hostvars[groups['backup'][0]]['ansible_host'] }} \
+        "echo OK"
+  when: "'postgres' in group_names"
+  become_user: postgres
+  register: ssh_test_pg
+  changed_when: false
+  failed_when: ssh_test_pg.rc != 0
+
+# =============================================================================
+# PGBACKREST CONFIGURATION
+# =============================================================================
+- name: Deploy pgbackrest.conf on backup server
+  template:
+    src: pgbackrest-repo.conf.j2
+    dest: "{{ pgbackrest_config_dir }}/pgbackrest.conf"
+    owner: pgbackrest
+    group: pgbackrest
+    mode: "0640"
+  when: "'backup' in group_names"
+
+- name: Deploy pgbackrest.conf on PG nodes
+  template:
+    src: pgbackrest-pg.conf.j2
+    dest: "{{ pgbackrest_config_dir }}/pgbackrest.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  when: "'postgres' in group_names"
+
+- name: Deploy archive-wrapper script on PG nodes
+  template:
+    src: archive-wrapper.sh.j2
+    dest: "{{ pgbackrest_config_dir }}/archive-wrapper.sh"
+    owner: postgres
+    group: postgres
+    mode: "0750"
+  when: "'postgres' in group_names"
+
+# =============================================================================
+# CREATE STANZA (run from backup server after PostgreSQL is running)
+# =============================================================================
+- name: Check if stanza already exists
+  shell: |
+    pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf info 2>&1
+  register: stanza_check
+  failed_when: false
+  changed_when: false
+  become_user: pgbackrest
+  when: "'backup' in group_names"
+
+- name: Create pgBackRest stanza
+  shell: |
+    pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf stanza-create
+  become_user: pgbackrest
+  when:
+    - "'backup' in group_names"
+    - stanza_check.rc != 0 or 'missing stanza' in (stanza_check.stdout | default('')) or 'missing stanza' in (stanza_check.stderr | default(''))
+  register: stanza_create_result
+
+- name: Verify stanza configuration and SSH connectivity
+  shell: |
+    pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf check
+  become_user: pgbackrest
+  when: "'backup' in group_names"
+  register: stanza_verify
+  # archive_mode may not be enabled yet (Phase 3 handles that).
+  # Final verification happens in Phase 4 after archive_mode is active.
+  ignore_errors: yes
+
+- name: Display stanza verification result
+  debug:
+    msg: >-
+      {{ 'Stanza check passed' if (stanza_verify.rc | default(1)) == 0
+         else 'Stanza check deferred — archive_mode not yet enabled (will be verified in Phase 4)' }}
+  when:
+    - "'backup' in group_names"
+    - stanza_verify is defined
+
+# =============================================================================
+# BACKUP SCRIPT WITH TELEGRAM NOTIFICATION
+# =============================================================================
+- name: Deploy pgBackRest backup script with Telegram notification
+  template:
+    src: pgbackrest-backup.sh.j2
+    dest: "{{ pgbackrest_config_dir }}/pgbackrest-backup.sh"
+    owner: pgbackrest
+    group: pgbackrest
+    mode: "0750"
+  when: "'backup' in group_names"
+
+# =============================================================================
+# CRON SCHEDULES
+# =============================================================================
+- name: Setup full backup cron job
+  cron:
+    name: "pgbackrest-full-backup"
+    job: "{{ pgbackrest_config_dir }}/pgbackrest-backup.sh full"
+    minute: "{{ pgbackrest_full_schedule.split(' ')[0] }}"
+    hour: "{{ pgbackrest_full_schedule.split(' ')[1] }}"
+    day: "{{ pgbackrest_full_schedule.split(' ')[2] }}"
+    month: "{{ pgbackrest_full_schedule.split(' ')[3] }}"
+    weekday: "{{ pgbackrest_full_schedule.split(' ')[4] }}"
+    user: pgbackrest
+  when: "'backup' in group_names"
+
+- name: Setup differential backup cron job
+  cron:
+    name: "pgbackrest-diff-backup"
+    job: "{{ pgbackrest_config_dir }}/pgbackrest-backup.sh diff"
+    minute: "{{ pgbackrest_diff_schedule.split(' ')[0] }}"
+    hour: "{{ pgbackrest_diff_schedule.split(' ')[1] }}"
+    day: "{{ pgbackrest_diff_schedule.split(' ')[2] }}"
+    month: "{{ pgbackrest_diff_schedule.split(' ')[3] }}"
+    weekday: "{{ pgbackrest_diff_schedule.split(' ')[4] }}"
+    user: pgbackrest
+  when: "'backup' in group_names"
+
+- name: Setup incremental backup cron job
+  cron:
+    name: "pgbackrest-incr-backup"
+    job: "{{ pgbackrest_config_dir }}/pgbackrest-backup.sh incr"
+    minute: "{{ pgbackrest_incr_schedule.split(' ')[0] }}"
+    hour: "{{ pgbackrest_incr_schedule.split(' ')[1] }}"
+    day: "{{ pgbackrest_incr_schedule.split(' ')[2] }}"
+    month: "{{ pgbackrest_incr_schedule.split(' ')[3] }}"
+    weekday: "{{ pgbackrest_incr_schedule.split(' ')[4] }}"
+    user: pgbackrest
+  when: "'backup' in group_names"

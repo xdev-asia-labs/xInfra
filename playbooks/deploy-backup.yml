@@ -1,0 +1,564 @@
+---
+# Deploy pgBackRest Backup Infrastructure
+#
+# This playbook deploys pgBackRest on:
+#   1. Backup server (pg-backup) — repository host, stores all backups
+#   2. PostgreSQL nodes — archive-push/archive-get for WAL archiving
+#
+# Prerequisites:
+#   - PostgreSQL cluster must be running (site.yml already deployed)
+#   - Backup server must be reachable via SSH
+#
+# Usage:
+#   set -a && source .env && set +a
+#   ansible-playbook playbooks/deploy-backup.yml -i inventory/hosts.yml
+#
+# After deployment:
+#   - First full backup: ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main backup --type=full"
+#   - Check status: ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main info"
+#
+# Author: xdev.asia
+
+# =============================================================================
+# PHASE 0: Pre-flight validation
+# =============================================================================
+- name: Pre-flight - Verify backup server is accessible and has sufficient disk
+  hosts: backup
+  become: yes
+  gather_facts: yes
+  tags:
+    - always
+    - preflight
+
+  tasks:
+    - name: Check available disk space on backup server
+      shell: |
+        df -B1 {{ pgbackrest_repo_path | dirname }} | tail -1 | awk '{print $4}'
+      register: available_bytes
+      changed_when: false
+
+    - name: Fail if backup disk space is insufficient (minimum 50 GB)
+      fail:
+        msg: >
+          Insufficient disk space on backup server {{ inventory_hostname }}.
+          Available: {{ (available_bytes.stdout | int / 1073741824) | round(1) }} GB.
+          Minimum recommended: 50 GB. Free up space before proceeding.
+      when: available_bytes.stdout | int < 53687091200
+
+    - name: Display available disk space
+      debug:
+        msg: "Backup server disk: {{ (available_bytes.stdout | int / 1073741824) | round(1) }} GB available - OK"
+
+- name: Pre-flight - Verify PostgreSQL cluster health
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tags:
+    - always
+    - preflight
+
+  tasks:
+    - name: Verify Patroni service is active
+      shell: systemctl is-active patroni
+      register: patroni_active
+      changed_when: false
+      failed_when: patroni_active.stdout.strip() != 'active'
+
+    - name: Verify all cluster members are running
+      shell: |
+        RUNNING=$(patronictl -c {{ patroni_config_dir }}/patroni.yml list 2>/dev/null | grep -cE " running | streaming ")
+        EXPECTED={{ groups['postgres'] | length }}
+        if [ "$RUNNING" -lt "$EXPECTED" ]; then
+          echo "ERROR: $RUNNING/$EXPECTED nodes healthy - fix cluster before deploying backup"
+          exit 1
+        fi
+        echo "OK: $RUNNING/$EXPECTED cluster members healthy"
+      register: cluster_health
+      run_once: true
+      changed_when: false
+
+    - name: Display cluster health
+      debug:
+        msg: "{{ cluster_health.stdout }}"
+      run_once: true
+
+# =============================================================================
+# PHASE 1: Setup backup server (common + pgBackRest repo)
+# =============================================================================
+- name: Setup backup server - Base system
+  hosts: backup
+  become: yes
+  gather_facts: yes
+  tags:
+    - common
+    - backup-server
+
+  roles:
+    - role: common
+
+# =============================================================================
+# PHASE 2: Install pgBackRest on ALL hosts (backup + PG nodes)
+# =============================================================================
+- name: Deploy pgBackRest on all hosts
+  hosts: backup:postgres
+  become: yes
+  gather_facts: yes
+  tags:
+    - pgbackrest
+    - backup
+
+  roles:
+    - role: pgbackrest
+
+# =============================================================================
+# PHASE 3a: Update Patroni DCS config for WAL archiving + pg_hba
+#
+# CRITICAL: After bootstrap, PostgreSQL parameters are stored in etcd (DCS).
+# The local patroni.yml bootstrap.dcs section is ONLY used during first initdb.
+# To change parameters on a running cluster, we must PATCH the DCS via REST API.
+# =============================================================================
+- name: Update Patroni DCS configuration for WAL archiving
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tags:
+    - patroni-reload
+    - wal-archiving
+
+  tasks:
+    - name: Update Patroni local YAML with archive settings (for future bootstraps)
+      template:
+        src: "{{ playbook_dir }}/../roles/patroni/templates/patroni.yml.j2"
+        dest: "{{ patroni_config_dir }}/patroni.yml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload Patroni service to pick up local YAML changes
+      systemd:
+        name: patroni
+        state: reloaded
+
+    # -----------------------------------------------------------------------
+    # PATCH archive_mode + archive_command into Patroni DCS (etcd).
+    # These are PostgreSQL parameters that Patroni manages via DCS.
+    # archive_mode requires a PostgreSQL restart (handled in Phase 3b).
+    # -----------------------------------------------------------------------
+    - name: PATCH archive_mode and archive_command into Patroni DCS config
+      uri:
+        url: "http://localhost:{{ patroni_api_port | default(8008) }}/config"
+        method: PATCH
+        body_format: json
+        body:
+          postgresql:
+            parameters:
+              archive_mode: "on"
+              archive_command: "{{ pgbackrest_config_dir }}/archive-wrapper.sh %p"
+        status_code: 200
+      register: archive_patch_result
+      run_once: true
+
+    - name: Display archive DCS patch result
+      debug:
+        msg: "DCS config updated — archive_mode: on, archive_command set. Pending restart: {{ archive_patch_result.json.get('postgresql', {}).get('parameters', {}).get('archive_mode', 'unknown') | default('check log') }}"
+      run_once: true
+
+    - name: Wait for DCS to propagate archive settings
+      pause:
+        seconds: 5
+      run_once: true
+
+    # -----------------------------------------------------------------------
+    # PATCH pg_hba into DCS to include backup server replication access.
+    # When pg_hba is null in DCS, Patroni uses bootstrap.pg_hba (from initdb).
+    # We must set pg_hba in DCS to include the backup server entry.
+    # -----------------------------------------------------------------------
+    - name: Check if backup server already in DCS pg_hba
+      uri:
+        url: "http://localhost:{{ patroni_api_port | default(8008) }}/config"
+        method: GET
+        return_content: yes
+      register: current_dcs_config
+      run_once: true
+
+    - name: Build complete pg_hba list for DCS
+      set_fact:
+        dcs_pg_hba:
+          - "host replication {{ postgresql_replication_user }} {{ hostvars[groups['postgres'][0]]['ansible_host'] }}/32 scram-sha-256"
+          - "host replication {{ postgresql_replication_user }} {{ hostvars[groups['postgres'][1]]['ansible_host'] }}/32 scram-sha-256"
+          - "host replication {{ postgresql_replication_user }} {{ hostvars[groups['postgres'][2]]['ansible_host'] }}/32 scram-sha-256"
+          - "host replication {{ postgresql_replication_user }} {{ hostvars[groups['backup'][0]]['ansible_host'] }}/32 scram-sha-256"
+          - "local all all peer"
+          - "host all all 127.0.0.1/32 scram-sha-256"
+          - "host all all ::1/128 scram-sha-256"
+          - "host all all {{ cluster_network }} scram-sha-256"
+      run_once: true
+      when: >
+        current_dcs_config.json.postgresql.pg_hba is not defined
+        or hostvars[groups['backup'][0]]['ansible_host'] not in (current_dcs_config.json.postgresql.pg_hba | default([]) | join(' '))
+
+    - name: PATCH pg_hba into Patroni DCS config
+      uri:
+        url: "http://localhost:{{ patroni_api_port | default(8008) }}/config"
+        method: PATCH
+        body_format: json
+        body:
+          postgresql:
+            pg_hba: "{{ dcs_pg_hba }}"
+        status_code: 200
+      register: hba_patch_result
+      run_once: true
+      when: dcs_pg_hba is defined
+
+    - name: Display pg_hba update result
+      debug:
+        msg: "{{ 'pg_hba: DCS updated with ' + (dcs_pg_hba | length | string) + ' entries (including backup server)' if dcs_pg_hba is defined else 'pg_hba: backup server already present in DCS config' }}"
+      run_once: true
+
+    - name: Wait for Patroni to apply pg_hba changes to all nodes
+      pause:
+        seconds: 10
+      run_once: true
+
+# =============================================================================
+# PHASE 3b: Restart PostgreSQL on all nodes to activate archive_mode
+#
+# archive_mode is a PostgreSQL parameter that requires a full restart.
+# A Patroni reload (SIGHUP) is NOT sufficient.
+# Strategy: restart replicas first, then switchover leader, restart old leader.
+# =============================================================================
+- name: Restart PostgreSQL to activate archive_mode
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  serial: 1
+  tags:
+    - patroni-reload
+    - wal-archiving
+
+  tasks:
+    - name: Check if this node is the current Patroni leader
+      shell: |
+        patronictl -c {{ patroni_config_dir }}/patroni.yml list 2>/dev/null | \
+          grep -F "{{ patroni_name }}" | grep -c "Leader" || true
+      register: node_is_leader
+      failed_when: false
+      changed_when: false
+
+    - name: Restart PostgreSQL on this replica node (archive_mode requires restart)
+      shell: |
+        patronictl -c {{ patroni_config_dir }}/patroni.yml restart \
+          {{ patroni_scope }} {{ patroni_name }} --force
+      when: node_is_leader.stdout | trim | int == 0
+      register: replica_restart
+
+    - name: Wait for this replica to rejoin cluster
+      pause:
+        seconds: 20
+      when: node_is_leader.stdout | trim | int == 0
+
+- name: Switchover and restart the Patroni leader (archive_mode activation)
+  hosts: postgres
+  become: yes
+  gather_facts: yes
+  tags:
+    - patroni-reload
+    - wal-archiving
+
+  tasks:
+    - name: Find current cluster leader
+      shell: |
+        patronictl -c {{ patroni_config_dir }}/patroni.yml list 2>/dev/null | \
+          grep "Leader" | awk '{print $2}'
+      register: leader_name
+      run_once: true
+      changed_when: false
+
+    - name: Switchover to a healthy replica before restarting leader
+      shell: |
+        LEADER="{{ leader_name.stdout | trim }}"
+        REPLICA=$(patronictl -c {{ patroni_config_dir }}/patroni.yml list 2>/dev/null | \
+          grep -E "Replica|Sync Standby" | grep -E "running|streaming" | head -1 | awk '{print $2}')
+        if [ -z "$REPLICA" ]; then
+          echo "ERROR: No healthy running replica found for switchover"
+          exit 1
+        fi
+        echo "Switching over from $LEADER to $REPLICA"
+        patronictl -c {{ patroni_config_dir }}/patroni.yml switchover \
+          {{ patroni_scope }} \
+          --primary "$LEADER" \
+          --candidate "$REPLICA" \
+          --force
+      when: leader_name.stdout | trim != ""
+      run_once: true
+      register: switchover_result
+
+    - name: Wait for switchover to complete
+      pause:
+        seconds: 25
+      when: leader_name.stdout | trim != ""
+      run_once: true
+
+    - name: Restart old leader (now a replica) for archive_mode activation
+      shell: |
+        OLD_LEADER="{{ leader_name.stdout | trim }}"
+        patronictl -c {{ patroni_config_dir }}/patroni.yml restart \
+          {{ patroni_scope }} "$OLD_LEADER" --force
+      when: leader_name.stdout | trim != ""
+      run_once: true
+      register: leader_restart
+
+    - name: Wait for cluster to fully stabilize after all restarts
+      pause:
+        seconds: 30
+      run_once: true
+
+    - name: Verify archive_mode is active on this node
+      become_user: postgres
+      shell: |
+        psql -tAc "SELECT setting FROM pg_settings WHERE name='archive_mode';"
+      register: archive_mode_verify
+      changed_when: false
+      failed_when: archive_mode_verify.stdout | trim not in ['on', 'always']
+
+    - name: Display final cluster status
+      shell: |
+        patronictl -c {{ patroni_config_dir }}/patroni.yml list
+      register: final_cluster_status
+      changed_when: false
+      run_once: true
+
+    - name: Show final cluster status
+      debug:
+        msg: "{{ final_cluster_status.stdout_lines }}"
+      run_once: true
+
+# =============================================================================
+# PHASE 4: Take initial full backup and verify deployment
+# =============================================================================
+- name: Create initial full backup
+  hosts: backup
+  become: yes
+  gather_facts: yes
+  tags:
+    - initial-backup
+
+  tasks:
+    - name: Wait for WAL archiving to become active on all nodes
+      pause:
+        seconds: 20
+        prompt: "Waiting for WAL archiving to activate across cluster..."
+
+    - name: Run initial full backup
+      shell: |
+        pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf --type=full backup
+      become_user: pgbackrest
+      register: backup_result
+      timeout: 7200
+
+    - name: Display backup output
+      debug:
+        msg: "{{ backup_result.stderr_lines | default([]) }}"
+
+    - name: Verify WAL archiving is working (pgbackrest check)
+      shell: |
+        pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf check
+      become_user: pgbackrest
+      register: stanza_check_final
+      changed_when: false
+      failed_when: stanza_check_final.rc != 0
+
+    - name: Show backup repository info
+      shell: |
+        pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf info
+      become_user: pgbackrest
+      register: backup_info
+      changed_when: false
+
+    - name: Display repository info
+      debug:
+        msg: "{{ backup_info.stdout_lines }}"
+
+    # --- Gather server metrics for detailed Telegram notification ---
+    - name: Get backup server disk usage
+      shell: |
+        df -h {{ pgbackrest_repo_path | dirname }} | tail -1 | awk '{printf "%s / %s (%s used)", $4, $2, $5}'
+      register: backup_disk_info
+      changed_when: false
+
+    - name: Get backup server memory info
+      shell: |
+        free -m | awk '/^Mem:/{printf "%dMi / %dMi (%d%%)", $3, $2, $3*100/$2}'
+      register: backup_mem_info
+      changed_when: false
+
+    - name: Get backup server load average
+      shell: |
+        uptime | awk -F'load average: ' '{print $2}'
+      register: backup_load_info
+      changed_when: false
+
+    - name: Get backup repo total size on disk
+      shell: |
+        du -sh {{ pgbackrest_repo_path }} 2>/dev/null | awk '{print $1}' || echo "N/A"
+      register: backup_repo_disk_usage
+      changed_when: false
+
+    - name: Get PG nodes disk and status via SSH
+      shell: |
+        for node_ip in {% for host in groups['postgres'] %}{{ hostvars[host]['ansible_host'] }}{% if not loop.last %} {% endif %}{% endfor %}; do
+          node_name=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${node_ip} "hostname -s" 2>/dev/null || echo "unknown")
+          disk_info=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${node_ip} "df -h /var/lib/postgresql 2>/dev/null || df -h /" 2>/dev/null | tail -1)
+          disk_total=$(echo "$disk_info" | awk '{print $2}')
+          disk_avail=$(echo "$disk_info" | awk '{print $4}')
+          disk_pct=$(echo "$disk_info" | awk '{print $5}')
+          mem_info=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${node_ip} "free -m | awk '/^Mem:/{printf \"%dMi/%dMi (%d%%)\", \$3, \$2, \$3*100/\$2}'" 2>/dev/null || echo "N/A")
+          load_info=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${node_ip} "uptime | awk -F'load average: ' '{print \$2}'" 2>/dev/null | awk -F, '{print $1}' || echo "N/A")
+          # Disk warning if usage >= 80%
+          pct_num=$(echo "$disk_pct" | tr -d '%')
+          if [ "$pct_num" -ge 80 ] 2>/dev/null; then
+            node_warn="⚠️"
+          else
+            node_warn="✅"
+          fi
+          echo "${node_warn}|${node_name}|${node_ip}|${disk_avail}/${disk_total} (${disk_pct})|${mem_info}|${load_info}"
+        done
+      register: pg_nodes_info
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Get Patroni cluster status via SSH to first PG node
+      shell: |
+        sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@{{ hostvars[groups['postgres'][0]]['ansible_host'] }} \
+          "patronictl -c {{ patroni_config_dir }}/patroni.yml list 2>/dev/null" || echo "N/A"
+      register: cluster_status_from_backup
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Get database list and sizes from primary PG node
+      shell: |
+        LEADER_IP=""
+        for ip in {% for host in groups['postgres'] %}{{ hostvars[host]['ansible_host'] }}{% if not loop.last %} {% endif %}{% endfor %}; do
+          is_leader=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${ip} "psql -tAc \"SELECT pg_is_in_recovery();\"" 2>/dev/null || echo "t")
+          if [ "$is_leader" = "f" ]; then
+            LEADER_IP=$ip
+            break
+          fi
+        done
+        if [ -z "$LEADER_IP" ]; then
+          LEADER_IP="{{ hostvars[groups['postgres'][0]]['ansible_host'] }}"
+        fi
+        sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${LEADER_IP} "psql -tA -c \"
+          SELECT
+            d.datname,
+            pg_size_pretty(pg_database_size(d.datname)),
+            pg_database_size(d.datname)
+          FROM pg_database d
+          WHERE d.datistemplate = false
+          ORDER BY pg_database_size(d.datname) DESC;
+        \"" 2>/dev/null || echo "N/A"
+      register: db_list_info
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Get database total size summary
+      shell: |
+        LEADER_IP=""
+        for ip in {% for host in groups['postgres'] %}{{ hostvars[host]['ansible_host'] }}{% if not loop.last %} {% endif %}{% endfor %}; do
+          is_leader=$(sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${ip} "psql -tAc \"SELECT pg_is_in_recovery();\"" 2>/dev/null || echo "t")
+          if [ "$is_leader" = "f" ]; then
+            LEADER_IP=$ip
+            break
+          fi
+        done
+        if [ -z "$LEADER_IP" ]; then
+          LEADER_IP="{{ hostvars[groups['postgres'][0]]['ansible_host'] }}"
+        fi
+        sudo -u pgbackrest ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 postgres@${LEADER_IP} "psql -tA -c \"
+          SELECT
+            count(*) AS db_count,
+            pg_size_pretty(sum(pg_database_size(datname))) AS total_size,
+            sum(pg_database_size(datname)) AS total_bytes
+          FROM pg_database
+          WHERE datistemplate = false;
+        \"" 2>/dev/null || echo "N/A"
+      register: db_summary_info
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "Expire old backups (retention: {{ pgbackrest_retention_full }} days)"
+      shell: |
+        pgbackrest --stanza={{ pgbackrest_stanza }} --config={{ pgbackrest_config_dir }}/pgbackrest.conf expire
+      become_user: pgbackrest
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Deployment summary
+      debug:
+        msg:
+          - "=========================================================="
+          - " pgBackRest deployment SUCCESSFUL!"
+          - "=========================================================="
+          - "Repository:    {{ target_hostname | default(ansible_hostname) }} ({{ ansible_host }})"
+          - "Repo path:     {{ pgbackrest_repo_path }}"
+          - "Stanza:        {{ pgbackrest_stanza }}"
+          - "Compression:   {{ pgbackrest_compress_type }} (level {{ pgbackrest_compress_level }})"
+          - "Retention:     {{ pgbackrest_retention_full }} full / {{ pgbackrest_retention_diff }} diff"
+          - "WAL archiving: ACTIVE (archive_mode=on on all nodes)"
+          - "----------------------------------------------------------"
+          - "Scheduled backups:"
+          - "  Full:         {{ pgbackrest_full_schedule }}"
+          - "  Differential: {{ pgbackrest_diff_schedule }}"
+          - "  Incremental:  {{ pgbackrest_incr_schedule }}"
+          - "----------------------------------------------------------"
+          - "Manual commands:"
+          - "  Status:  sudo -u pgbackrest pgbackrest --stanza={{ pgbackrest_stanza }} info"
+          - "  Backup:  sudo -u pgbackrest pgbackrest --stanza={{ pgbackrest_stanza }} --type=full backup"
+          - "  Restore: sudo -u pgbackrest pgbackrest --stanza={{ pgbackrest_stanza }} restore"
+          - "=========================================================="
+
+    - name: Send Telegram notification on successful deployment
+      uri:
+        url: "https://api.telegram.org/bot{{ telegram_bot_token }}/sendMessage"
+        method: POST
+        body_format: json
+        body:
+          chat_id: "{{ telegram_chat_id }}"
+          parse_mode: HTML
+          text: |
+            ✅ <b>pgBackRest Deployment Successful</b>
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            📦 <b>BACKUP INFO</b>
+            ├ Stanza: <code>{{ pgbackrest_stanza }}</code>
+            ├ {{ backup_info.stdout_lines | select('match', '.*database size.*') | first | default('database size: N/A') | trim }}
+            ├ {{ backup_info.stdout_lines | select('match', '.*repo1:.*') | first | default('repo1: N/A') | trim }}
+            ├ Compression: {{ pgbackrest_compress_type }} (level {{ pgbackrest_compress_level }})
+            ├ Retention: {{ pgbackrest_retention_full }} days (auto-expire)
+            └ WAL: {{ backup_info.stdout_lines | select('match', '.*wal archive.*') | first | default('N/A') | trim }}
+
+            🗃 <b>DATABASES</b> ({{ db_summary_info.stdout.split('|')[0] | default('?') }} databases — Total: {{ db_summary_info.stdout.split('|')[1] | default('N/A') | trim }})
+            {% for line in db_list_info.stdout_lines | default([]) %}{% if '|' in line %}├ <code>{{ line.split('|')[0] }}</code>: {{ line.split('|')[1] | trim }}
+            {% endif %}{% endfor %}
+            🗓 <b>BACKUP SCHEDULE</b>
+            ├ Full: <code>{{ pgbackrest_full_schedule }}</code>
+            ├ Diff: <code>{{ pgbackrest_diff_schedule }}</code>
+            └ Incr: <code>{{ pgbackrest_incr_schedule }}</code>
+
+            🖥 <b>BACKUP SERVER</b> — {{ target_hostname | default(ansible_hostname) }} ({{ ansible_host }})
+            ├ 💾 Disk free: {{ backup_disk_info.stdout | default('N/A') }}
+            ├ 📂 Repo size: {{ backup_repo_disk_usage.stdout | default('N/A') }}
+            ├ 🧠 RAM: {{ backup_mem_info.stdout | default('N/A') }}
+            └ ⚡ Load: {{ backup_load_info.stdout | default('N/A') }}
+
+            🏗 <b>POSTGRESQL NODES</b>
+            {% for line in pg_nodes_info.stdout_lines | default([]) %}{% set parts = line.split('|') %}{{ parts[0] }} <b>{{ parts[1] }}</b> ({{ parts[2] }})
+            ├ 💾 Disk: {{ parts[3] }}  🧠 RAM: {{ parts[4] }}  ⚡ Load: {{ parts[5] }}
+            {% endfor %}
+            🔄 <b>CLUSTER STATUS</b>
+            <pre>{{ cluster_status_from_backup.stdout | default('N/A') }}</pre>
+
+            ⏰ <b>Time:</b> {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -Iseconds')) }}
+        status_code: 200
+      when: telegram_enabled | default(false) | bool and telegram_bot_token | default('') | length > 0
+      ignore_errors: yes

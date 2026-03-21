@@ -36,7 +36,7 @@ Three-node cluster defined in `inventory/hosts.yml`:
 postgres:
   hosts:
     pg-node1:
-      ansible_host: 172.23.202.11
+      ansible_host: $NODE1_IP
       patroni_name: node1
       etcd_name: etcd1
 ```
@@ -75,7 +75,7 @@ etcd3:
   hosts: {% for host in groups['postgres'] %}{{ hostvars[host]['ansible_host'] }}:{{ etcd_client_port }}{% if not loop.last %},{% endif %}{% endfor %}
 ```
 
-Generates: `172.23.202.11:2379,172.23.202.12:2379,172.23.202.13:2379`
+Generates: `$NODE1_IP:2379,$NODE2_IP:2379,$NODE3_IP:2379`
 
 ### PgBouncer ↔ PostgreSQL Integration
 
@@ -220,3 +220,38 @@ When updating component versions, check:
 1. Binary paths in `*_BIN_DIR` variables
 2. systemd service templates compatibility
 3. Configuration file format changes
+
+## Infrastructure Topology
+
+| Host | Role | Specs |
+|------|------|-------|
+| `pg-node1` (`$NODE1_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-node2` (`$NODE2_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-node3` (`$NODE3_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-backup` (`$BACKUP_SERVER_IP`) | Dedicated backup server (pgBackRest) | 4 vCPU / 8 GB RAM |
+| `monitoring` (`$MONITORING_SERVER_IP`) | Prometheus + Grafana | 4 vCPU / 8 GB RAM |
+
+All IPs are defined **exclusively in `.env`** (gitignored). Inventory `hosts.yml` reads them via `lookup('env', 'VAR_NAME')`.
+
+## Security: No Hardcoded IPs
+
+**NEVER hardcode real IP addresses** in any file that gets committed to git. This includes:
+- `inventory/hosts.yml` and `hosts.yml.example` — use `lookup('env', ...)` 
+- `inventory/group_vars/all.yml` — defaults must use placeholder IPs (`10.0.0.x`)
+- `.env.example` — use placeholder IPs (`10.0.0.x`), never real ones
+- Documentation (`.md` files) — use `$NODE1_IP`, `$CLUSTER_NETWORK` env var references
+- Scripts — use env vars (`$NODE1_IP`) or accept parameters, never hardcode
+
+**Only `.env`** (which is in `.gitignore`) should contain real IP addresses.
+
+### Environment Variables for IPs
+
+```bash
+# .env — the ONLY place with real IPs
+NODE1_IP=<real-ip>        NODE1_NAME=pg-node1
+NODE2_IP=<real-ip>        NODE2_NAME=pg-node2
+NODE3_IP=<real-ip>        NODE3_NAME=pg-node3
+BACKUP_SERVER_IP=<real-ip>      BACKUP_SERVER_NAME=pg-backup
+MONITORING_SERVER_IP=<real-ip>  MONITORING_SERVER_NAME=monitoring
+CLUSTER_NETWORK=<real-cidr>     CLUSTER_NETMASK=255.255.255.0
+```

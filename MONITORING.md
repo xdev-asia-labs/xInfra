@@ -45,12 +45,14 @@ Full monitoring stack với **Prometheus + Grafana** để theo dõi PostgreSQL 
 ## Components
 
 ### 1. **Prometheus** (Port 9090)
+
 - Time-series database
 - Scrapes metrics mỗi 15 giây
 - Lưu trữ 30 ngày (configurable)
 - Alert rules cho critical events
 
 ### 2. **Grafana** (Port 3000)
+
 - Visualization dashboard
 - Pre-configured dashboards:
   - PostgreSQL Overview
@@ -60,6 +62,7 @@ Full monitoring stack với **Prometheus + Grafana** để theo dõi PostgreSQL 
 - Alert notifications (optional)
 
 ### 3. **Exporters** (Trên mỗi PostgreSQL node)
+
 - **node_exporter** (9100): CPU, RAM, Disk, Network
 - **postgres_exporter** (9187): Connections, queries, replication lag
 - **pgbouncer_exporter** (9127): Connection pool stats
@@ -79,12 +82,13 @@ nano .env
 ```
 
 **Key monitoring variables trong `.env`:**
+
 ```bash
 # Enable/Disable Monitoring
 MONITORING_ENABLED=true
 
 # Monitoring Server (có thể là node riêng hoặc dùng 1 trong 3 postgres nodes)
-MONITORING_SERVER_IP=172.23.202.11
+MONITORING_SERVER_IP=10.0.0.22
 MONITORING_SERVER_NAME=pg-node1
 
 # Prometheus
@@ -105,6 +109,7 @@ PGBOUNCER_EXPORTER_PORT=9127
 ```
 
 **Lưu ý:**
+
 - Set `MONITORING_ENABLED=true` để bật monitoring
 - `MONITORING_SERVER_IP` và `MONITORING_SERVER_NAME` để chỉ định máy chủ monitoring riêng
 - Nếu không có server riêng, có thể dùng `pg-node1` (hoặc node nào có tài nguyên dư)
@@ -132,6 +137,7 @@ set -a && source .env && set +a
 ```
 
 Expected output:
+
 ```
 ✓ Prometheus is healthy
 ✓ Grafana is healthy
@@ -143,6 +149,7 @@ Expected output:
 ## Access URLs
 
 ### Prometheus
+
 ```
 URL: http://<node-ip>:9090
 Targets: http://<node-ip>:9090/targets
@@ -150,6 +157,7 @@ Alerts: http://<node-ip>:9090/alerts
 ```
 
 ### Grafana
+
 ```
 URL: http://<node-ip>:3000
 Username: admin (default)
@@ -157,6 +165,7 @@ Password: Check GRAFANA_ADMIN_PASSWORD in .env
 ```
 
 ### Exporters (per node)
+
 ```
 Node Exporter: http://<node-ip>:9100/metrics
 PostgreSQL Exporter: http://<node-ip>:9187/metrics
@@ -170,6 +179,7 @@ etcd Metrics: http://<node-ip>:2379/metrics
 Sau khi login vào Grafana, có 4 dashboards pre-configured:
 
 ### 1. **PostgreSQL Overview**
+
 - Database status (up/down)
 - Active connections per database
 - Replication lag
@@ -178,12 +188,14 @@ Sau khi login vào Grafana, có 4 dashboards pre-configured:
 - Dead tuples count
 
 ### 2. **Patroni HA Cluster**
+
 - Current leader node
 - Cluster member states
 - Timeline changes (failover events)
 - DCS (etcd) connectivity
 
 ### 3. **Node Exporter - System Metrics**
+
 - CPU usage per core
 - Memory usage (total/available)
 - Disk usage per mount point
@@ -191,6 +203,7 @@ Sau khi login vào Grafana, có 4 dashboards pre-configured:
 - Disk I/O
 
 ### 4. **etcd Cluster**
+
 - Leader status
 - Leader change rate
 - RPC traffic
@@ -201,6 +214,7 @@ Sau khi login vào Grafana, có 4 dashboards pre-configured:
 Prometheus có sẵn alert rules cho:
 
 ### Critical Alerts
+
 - **PostgreSQLDown**: Database instance down > 1 minute
 - **PatroniNoLeader**: Cluster không có leader > 1 minute
 - **EtcdNoLeader**: etcd không có leader > 1 minute
@@ -208,6 +222,7 @@ Prometheus có sẵn alert rules cho:
 - **PgBouncerDown**: Connection pooler down > 2 minutes
 
 ### Warning Alerts
+
 - **PostgreSQLReplicationLag**: Lag > 60 seconds
 - **PostgreSQLTooManyConnections**: > 80% max connections
 - **HighCPUUsage**: CPU > 80% trong 5 minutes

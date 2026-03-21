@@ -12,15 +12,18 @@ all:
     # PostgreSQL cluster nodes (3 nodes)
     postgres:
       hosts:
-        pg-node1:
-          ansible_host: 172.23.202.11  # Update with your IP
+        "{{ lookup('env', 'NODE1_NAME') | default('pg-node1', true) }}":
+          ansible_host: "{{ lookup('env', 'NODE1_IP') }}"
+          target_hostname: "{{ lookup('env', 'NODE1_NAME') | default('pg-node1', true) }}"
           patroni_name: node1
           etcd_name: etcd1
-        pg-node2:
-          ansible_host: 172.23.202.12  # Update with your IP
+        "{{ lookup('env', 'NODE2_NAME') | default('pg-node2', true) }}":
+          ansible_host: "{{ lookup('env', 'NODE2_IP') }}"
+          target_hostname: "{{ lookup('env', 'NODE2_NAME') | default('pg-node2', true) }}"
           patroni_name: node2
           etcd_name: etcd2
-        pg-node3:
-          ansible_host: 172.23.202.13  # Update with your IP
+        "{{ lookup('env', 'NODE3_NAME') | default('pg-node3', true) }}":
+          ansible_host: "{{ lookup('env', 'NODE3_IP') }}"
+          target_hostname: "{{ lookup('env', 'NODE3_NAME') | default('pg-node3', true) }}"
           patroni_name: node3
           etcd_name: etcd3

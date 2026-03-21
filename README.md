@@ -31,6 +31,7 @@ Ansible playbooks to automate the installation and configuration of a PostgreSQL
 - [Deployment](#-deployment)
 - [Application Connection](#-application-connection)
 - [Cluster Management](#-cluster-management)
+- [Backup & Recovery](#-backup--recovery-pgbackrest)
 - [Monitoring](#-monitoring)
 - [Troubleshooting](#-troubleshooting)
 - [Documentation](#-documentation)
@@ -47,6 +48,8 @@ Ansible playbooks to automate the installation and configuration of a PostgreSQL
 - ✅ **Auto Recovery**: pg_rewind for failed primary reintegration
 - ✅ **Production Ready**: Optimized for 16GB RAM, SSD, multi-core systems
 - ✅ **Callback Scripts**: Event-driven monitoring and alerting
+- ✅ **Backup & PITR**: pgBackRest with full/diff/incremental backups and point-in-time recovery
+- ✅ **WAL Archiving**: Continuous WAL archiving to dedicated backup server
 
 ## 🏗️ Architecture
 
@@ -87,10 +90,28 @@ Ansible playbooks to automate the installation and configuration of a PostgreSQL
 │   Node1 (etcd1)  │  Node2 (etcd2)  │  Node3 (etcd3)            │
 └────────────────────────────────────────────────────────────────┘
 
-Network: 10.0.0.0/24
-  - pg-node1: 10.0.0.11
-  - pg-node2: 10.0.0.12
-  - pg-node3: 10.0.0.13
+                         SSH (WAL Archive + Backup)
+┌──────────────────────────────────────────────────────────┐
+│  All PG Nodes (archive-push / archive-get)               │
+└───────────────────────────┬──────────────────────────────┘
+                            │
+                ┌───────────▼───────────────────────────────┐
+                │  pg-backup ($BACKUP_SERVER_IP)             │
+                │  pgBackRest Repository                     │
+                │  Full / Diff / Incremental Backups         │
+                │  WAL Archive Storage                       │
+                │  Cron: Sun Full, Mon-Sat Diff, 6h Incr    │
+                └───────────────────────────────────────────┘
+
+Network: $CLUSTER_NETWORK
+  Cluster Nodes:
+    - pg-node1: $NODE1_IP  (PostgreSQL + Patroni + etcd + PgBouncer)
+    - pg-node2: $NODE2_IP  (PostgreSQL + Patroni + etcd + PgBouncer)
+    - pg-node3: $NODE3_IP  (PostgreSQL + Patroni + etcd + PgBouncer)
+  Backup Server:
+    - pg-backup: $BACKUP_SERVER_IP  (pgBackRest repository)
+  Monitoring:
+    - monitoring: $MONITORING_SERVER_IP  (Prometheus + Grafana)
 ```
 
 ### Component Versions
@@ -101,6 +122,7 @@ Network: 10.0.0.0/24
 | Patroni | 4.1.0 | ✅ Production |
 | etcd | 3.5.25 | ✅ Production |
 | PgBouncer | 1.25.0 | ✅ Production |
+| pgBackRest | latest | ✅ Production |
 
 ## 📦 Requirements
 
@@ -111,7 +133,15 @@ Network: 10.0.0.0/24
 - CPU: ~5 cores (16 cores total across cluster)
 - RAM: 16 GB (48 GB total)
 - Disk: 200 GB SSD (600 GB total)
-- Network: 1 Gbps on 10.0.0.0/24
+- Network: 1 Gbps
+
+| Host | Role | Specs |
+|------|------|-------|
+| `pg-node1` (`$NODE1_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-node2` (`$NODE2_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-node3` (`$NODE3_IP`) | PostgreSQL + Patroni + etcd + PgBouncer | 6 vCPU / 16 GB RAM |
+| `pg-backup` (`$BACKUP_SERVER_IP`) | pgBackRest repository server | 4 vCPU / 8 GB RAM |
+| `monitoring` (`$MONITORING_SERVER_IP`) | Prometheus + Grafana | 4 vCPU / 8 GB RAM |
 
 **Minimum (Lab/Dev)**:
 
@@ -149,7 +179,7 @@ Network: 10.0.0.0/24
 | Patroni REST API | 8008 | TCP | Internal | Health checks, cluster management |
 | etcd client | 2379 | TCP | Internal | Client-to-etcd communication |
 | etcd peer | 2380 | TCP | Internal | etcd cluster replication |
-| SSH | 22 | TCP | Admin | Remote administration |
+| SSH | 22 | TCP | Admin | Remote administration, pgBackRest transport |
 
 **⚠️ Important**: Applications should connect to **PgBouncer (port 6432)**, not directly to PostgreSQL (port 5432).
 
@@ -164,7 +194,7 @@ cd postgres-patroni-etcd-install
 
 ### 2. Configure Environment Variables
 
-**All cluster configuration is centralized in the `.env` file** (70+ variables).
+**All cluster configuration is centralized in the `.env` file** (80+ variables).
 
 ```bash
 # Copy example template
@@ -236,6 +266,9 @@ ansible-playbook playbooks/site.yml -i inventory/hosts.yml --tags postgresql
 ansible-playbook playbooks/site.yml -i inventory/hosts.yml --tags etcd
 ansible-playbook playbooks/site.yml -i inventory/hosts.yml --tags patroni
 ansible-playbook playbooks/site.yml -i inventory/hosts.yml --tags pgbouncer
+
+# Deploy backup infrastructure (after cluster is running)
+ansible-playbook playbooks/deploy-backup.yml -i inventory/hosts.yml
 ```
 
 ### 5. Verify Deployment
@@ -266,14 +299,15 @@ PGPASSWORD="${POSTGRESQL_SUPERUSER_PASSWORD}" psql -p 6432 -U postgres -h ${NODE
 
 All cluster settings are managed through `.env`.
 
-**Variable Categories (70+ total):**
+**Variable Categories (80+ total):**
 
 1. **Network Configuration** (8 vars): IPs, hostnames, network/netmask
 2. **PostgreSQL Settings** (35+ vars): Version, ports, passwords, performance tuning
 3. **etcd Configuration** (10 vars): Version, ports, cluster settings
 4. **Patroni Settings** (16 vars): HA configuration, DCS settings, REST API
 5. **PgBouncer Configuration** (18 vars): Pooling limits, timeouts, logging
-6. **System Settings** (10 vars): Firewall, NTP, logging
+6. **pgBackRest Configuration** (12 vars): Backup retention, compression, schedules
+7. **System Settings** (10 vars): Firewall, NTP, logging
 
 **Loading Environment Variables:**
 
@@ -734,7 +768,215 @@ set -a && source .env && set +a
 ansible-playbook playbooks/add-replica.yml -i inventory/hosts.yml
 ```
 
-## 📊 Monitoring
+## 💾 Backup & Recovery (pgBackRest)
+
+> **📖 Chi tiết đầy đủ: xem [BACKUP.md](BACKUP.md)** — Chiến lược backup, flow diagrams, retention policy, restore procedures.
+
+### Architecture
+
+pgBackRest provides enterprise-grade backup with WAL archiving, point-in-time recovery (PITR), and efficient full/differential/incremental backup strategies.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    pgBackRest Backup Architecture                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  pg-node1 ($NODE1_IP)          pg-backup ($BACKUP_SERVER_IP)        │
+│  ┌────────────────────┐        ┌──────────────────────────┐         │
+│  │ PostgreSQL Primary  │──SSH──→│  pgBackRest Repository   │         │
+│  │ archive_command:    │        │  /var/lib/pgbackrest     │         │
+│  │   pgbackrest push   │        │                          │         │
+│  └────────────────────┘        │  ┌────────────────────┐  │         │
+│                                 │  │ Full Backups       │  │         │
+│  pg-node2 ($NODE2_IP)          │  │ Diff Backups       │  │         │
+│  ┌────────────────────┐        │  │ Incr Backups       │  │         │
+│  │ PostgreSQL Replica  │──SSH──→│  │ WAL Archive        │  │         │
+│  │ restore_command:    │        │  └────────────────────┘  │         │
+│  │   pgbackrest get    │        │                          │         │
+│  └────────────────────┘        │  Cron Schedules:         │         │
+│                                 │   Sun 01:00 → Full      │         │
+│  pg-node3 ($NODE3_IP)          │   Mon-Sat 01:00 → Diff  │         │
+│  ┌────────────────────┐        │   Every 6h → Incremental │         │
+│  │ PostgreSQL Replica  │──SSH──→│                          │         │
+│  │ restore_command:    │        └──────────────────────────┘         │
+│  │   pgbackrest get    │                                             │
+│  └────────────────────┘                                              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Backup Types
+
+| Type | Schedule | Description | Speed |
+|------|----------|-------------|-------|
+| **Full** | Sunday 01:00 | Complete copy of all data | Slowest |
+| **Differential** | Mon-Sat 01:00 | Changes since last full backup | Medium |
+| **Incremental** | Every 6 hours | Changes since last any backup | Fastest |
+
+### Configuration
+
+pgBackRest settings in `.env`:
+
+```bash
+# Enable pgBackRest
+PGBACKREST_ENABLED=true
+PGBACKREST_STANZA=main
+
+# Repository (on backup server)
+PGBACKREST_REPO_PATH=/var/lib/pgbackrest
+
+# Retention: time-based, keep backups for 7 days
+PGBACKREST_RETENTION_FULL_TYPE=time
+PGBACKREST_RETENTION_FULL=7
+PGBACKREST_RETENTION_DIFF=7
+
+# Compression (zstd for best ratio/speed)
+PGBACKREST_COMPRESS_TYPE=zst
+PGBACKREST_COMPRESS_LEVEL=3
+
+# Parallelism (adjust for backup server CPU)
+PGBACKREST_PROCESS_MAX=2
+
+# Schedules (cron format)
+PGBACKREST_FULL_SCHEDULE='0 1 * * 0'       # Sunday 01:00
+PGBACKREST_DIFF_SCHEDULE='0 1 * * 1-6'     # Mon-Sat 01:00
+PGBACKREST_INCR_SCHEDULE='0 */6 * * *'     # Every 6 hours
+```
+
+### Deploy Backup Infrastructure
+
+```bash
+# Load environment
+set -a && source .env && set +a
+
+# Deploy pgBackRest to backup server + PG nodes
+ansible-playbook playbooks/deploy-backup.yml -i inventory/hosts.yml
+```
+
+The playbook executes 4 phases:
+
+1. **Common setup** on backup server (packages, hostname, firewall, chrony)
+2. **pgBackRest install** on backup server + PG nodes (SSH keys, config, stanza)
+3. **Patroni reload** to enable `archive_mode=on` and `archive_command`
+4. **Initial full backup** from backup server
+
+### Manual Backup Commands
+
+All backup commands run on the **backup server** as the `pgbackrest` user:
+
+```bash
+# Check backup status
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main info"
+
+# Run manual full backup
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main --type=full backup"
+
+# Run differential backup
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main --type=diff backup"
+
+# Run incremental backup
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main --type=incr backup"
+
+# Verify backup integrity
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main check"
+```
+
+### Restore Operations
+
+#### Full Cluster Restore
+
+Stop Patroni on all nodes, then restore from backup:
+
+```bash
+# 1. Stop Patroni on all nodes
+ssh root@$NODE1_IP "systemctl stop patroni"
+ssh root@$NODE2_IP "systemctl stop patroni"
+ssh root@$NODE3_IP "systemctl stop patroni"
+
+# 2. Clear existing data on primary
+ssh root@$NODE1_IP "rm -rf /var/lib/postgresql/18/data/*"
+
+# 3. Restore from latest backup
+ssh root@$NODE1_IP "sudo -u postgres pgbackrest --stanza=main --delta restore"
+
+# 4. Start Patroni on primary first
+ssh root@$NODE1_IP "systemctl start patroni"
+
+# 5. Wait for primary to be ready, then start replicas
+sleep 30
+ssh root@$NODE2_IP "systemctl start patroni"
+ssh root@$NODE3_IP "systemctl start patroni"
+```
+
+#### Point-in-Time Recovery (PITR)
+
+Restore to a specific point in time:
+
+```bash
+# Restore to a specific timestamp
+ssh root@$NODE1_IP "sudo -u postgres pgbackrest --stanza=main \
+  --type=time \"--target=2026-03-21 14:30:00+07\" \
+  --target-action=promote \
+  --delta restore"
+```
+
+#### Restore Specific Database
+
+```bash
+# Restore only specific databases
+ssh root@$NODE1_IP "sudo -u postgres pgbackrest --stanza=main \
+  --db-include=identity --db-include=keycloak \
+  --delta restore"
+```
+
+### WAL Archiving
+
+pgBackRest integrates with Patroni for continuous WAL archiving:
+
+- **archive_command**: Patroni pushes WAL files to backup server via `pgbackrest archive-push`
+- **restore_command**: Replicas and PITR use `pgbackrest archive-get` to fetch WAL files
+- **archive-async**: Asynchronous archiving for better write performance
+
+Verify WAL archiving is working:
+
+```bash
+# Check archive status on PG node
+ssh root@$NODE1_IP "sudo -u postgres psql -c \"SELECT * FROM pg_stat_archiver;\""
+
+# Check WAL archive on backup server
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main info"
+```
+
+### Backup Monitoring
+
+```bash
+# List all backups with details
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main info --output=json" | python3 -m json.tool
+
+# Check backup repo disk usage
+ssh root@$BACKUP_SERVER_IP "du -sh /var/lib/pgbackrest/"
+
+# Check cron job logs
+ssh root@$BACKUP_SERVER_IP "tail -50 /var/log/pgbackrest/cron-full.log"
+ssh root@$BACKUP_SERVER_IP "tail -50 /var/log/pgbackrest/cron-diff.log"
+
+# Verify stanza health
+ssh root@$BACKUP_SERVER_IP "sudo -u pgbackrest pgbackrest --stanza=main check"
+```
+
+### File Structure
+
+```
+roles/pgbackrest/
+├── defaults/main.yml              # Default variables
+├── handlers/main.yml              # Handlers
+├── tasks/main.yml                 # Install, SSH setup, config, stanza, cron
+└── templates/
+    ├── pgbackrest-repo.conf.j2    # Backup server config (repository)
+    └── pgbackrest-pg.conf.j2     # PG node config (client)
+```
+
+## �📊 Monitoring
 
 ### Health Check Endpoints
 
@@ -1078,26 +1320,31 @@ This project includes comprehensive documentation:
 This deployment includes production-grade security hardening:
 
 ✅ **Strong Authentication**
+
 - SCRAM-SHA-256 (replaces vulnerable MD5)
 - 32-character random passwords
 - Patroni REST API authentication
 
 ✅ **Network Security**
+
 - Cluster-only access (no 0.0.0.0/0)
 - SSL/TLS encryption enabled by default
 - etcd authentication required
 
 ✅ **Access Control**
+
 - Minimal privilege principle
 - Firewall rules (UFW/firewalld)
 - Audit logging support
 
 ✅ **CVE Compliance**
+
 - PostgreSQL 18.2+ (fixes CVE-2025-8714)
 - Regular security updates
 - Vulnerability monitoring
 
 **Quick Security Setup:**
+
 ```bash
 # Generate strong passwords
 ./scripts/security_setup.sh --generate
@@ -1126,17 +1373,18 @@ This deployment includes production-grade security hardening:
 
 ### Operational Excellence
 
-- **Single Source of Truth**: All 70+ config variables in `.env`
+- **Single Source of Truth**: All 80+ config variables in `.env`
 - **Multi-Environment**: Easy switching between dev/staging/prod
 - **Version Control Friendly**: `.env` gitignored, `.env.example` committed
-- **Comprehensive Docs**: 45KB+ documentation covering all aspects
+- **Comprehensive Docs**: 50KB+ documentation covering all aspects
 
 ### Production Ready
 
 - **Battle Tested**: PostgreSQL 18.1, Patroni 4.1.0, etcd 3.5.25
 - **Security Focused**: MD5 auth, firewall rules, password management
 - **Monitoring Ready**: Prometheus-compatible metrics, health endpoints
-- **Backup Support**: Ready for pgBackRest, Barman, or WAL-G integration
+- **Backup & PITR**: pgBackRest with full/diff/incremental + point-in-time recovery
+- **WAL Archiving**: Continuous archiving to dedicated backup server via SSH
 
 ## 🚀 Performance Characteristics
 
@@ -1178,7 +1426,9 @@ Expected Performance:
 - [ ] Update application connection strings (port 6432)
 - [ ] Test application connectivity
 - [ ] Setup monitoring/alerting
-- [ ] Schedule backups
+- [ ] Deploy pgBackRest backup: `ansible-playbook playbooks/deploy-backup.yml`
+- [ ] Verify backup: `pgbackrest --stanza=main info`
+- [ ] Test restore procedure
 - [ ] Document runbooks
 
 ## 🔗 External References
@@ -1187,6 +1437,7 @@ Expected Performance:
 - [Patroni Documentation](https://patroni.readthedocs.io/)
 - [etcd Documentation](https://etcd.io/docs/)
 - [PgBouncer Documentation](https://www.pgbouncer.org/)
+- [pgBackRest Documentation](https://pgbackrest.org/user-guide.html)
 - [Ansible Documentation](https://docs.ansible.com/)
 
 ## 📝 License
@@ -1211,5 +1462,5 @@ Contributions are welcome! Please:
 ---
 
 **Maintained by**: [xdev.asia](https://xdev.asia)  
-**Last Updated**: November 25, 2025  
+**Last Updated**: March 21, 2026  
 **Cluster Status**: ✅ Fully Operational

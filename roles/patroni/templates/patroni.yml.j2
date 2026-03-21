@@ -69,6 +69,12 @@ bootstrap:
         wal_keep_size: "{{ postgresql_wal_keep_size }}"
         wal_log_hints: "{{ postgresql_wal_log_hints }}"
         
+{% if pgbackrest_enabled | default(false) %}
+        # pgBackRest WAL archiving
+        archive_mode: "on"
+        archive_command: "{{ pgbackrest_config_dir }}/archive-wrapper.sh %p"
+{% endif %}
+
         # Performance settings
         max_connections: {{ postgresql_max_connections }}
         shared_buffers: "{{ postgresql_shared_buffers }}"
@@ -118,6 +124,10 @@ bootstrap:
     - host all all ::1/128 scram-sha-256
     # Cluster network only (secure)
     - host all all {{ cluster_network }} scram-sha-256
+{% if pgbackrest_enabled | default(false) and groups['backup'] is defined %}
+    # Backup server access
+    - host replication {{ postgresql_replication_user }} {{ hostvars[groups['backup'][0]]['ansible_host'] }}/32 scram-sha-256
+{% endif %}
 
   # Users to create during bootstrap
   users:
@@ -141,6 +151,12 @@ postgresql:
 {% endif %}
   pgpass: /tmp/pgpass
   
+{% if pgbackrest_enabled | default(false) %}
+  # pgBackRest restore command for PITR and replica recovery
+  recovery_conf:
+    restore_command: "pgbackrest --stanza={{ pgbackrest_stanza }} archive-get %f %p"
+{% endif %}
+
   authentication:
     replication:
       username: {{ postgresql_replication_user }}

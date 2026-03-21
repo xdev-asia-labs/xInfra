@@ -7,29 +7,37 @@ This document outlines the security features and hardening measures implemented 
 ## 🔒 Security Features Enabled by Default
 
 ### 1. **PostgreSQL Authentication**
+
 ✅ **SCRAM-SHA-256** authentication (industry standard, replaces deprecated MD5)
+
 - All connections use `scram-sha-256` hash algorithm
 - Passwords never transmitted in cleartext
 - Protection against rainbow table attacks
 
 ### 2. **Network Access Control**
+
 ✅ **Restricted pg_hba.conf** rules:
+
 ```
 # ❌ REMOVED: host all all 0.0.0.0/0 md5 (DANGEROUS!)
 # ✅ SECURE: Only cluster network allowed
 - host all all <CLUSTER_NETWORK> scram-sha-256
 ```
 
-**Default behavior**: Only nodes within `CLUSTER_NETWORK` (e.g., 172.23.202.0/24) can connect to PostgreSQL.
+**Default behavior**: Only nodes within `CLUSTER_NETWORK` (e.g., 10.0.0.0/24) can connect to PostgreSQL.
 
 ### 3. **SSL/TLS Encryption**
+
 ✅ **PostgreSQL SSL enabled by default** (`POSTGRESQL_SSL_ENABLED=true`)
+
 - Encrypts all client-server communication
 - Prevents password sniffing and man-in-the-middle attacks
 - Self-signed certificates auto-generated if not provided
 
 ### 4. **Patroni REST API Authentication**
+
 ✅ **HTTP Basic Auth** enabled by default:
+
 ```yaml
 PATRONI_RESTAPI_AUTH_ENABLED=true
 PATRONI_RESTAPI_USERNAME=patroni_admin
@@ -39,20 +47,26 @@ PATRONI_RESTAPI_PASSWORD=<strong_password>
 **Protected endpoints**: `/switchover`, `/failover`, `/restart`, `/reload`, `/reinitialize`
 
 ### 5. **etcd Authentication**
+
 ✅ **etcd auth enabled** (`ETCD_AUTH_ENABLED=true`)
+
 - Root user password required
 - Prevents unauthorized cluster state manipulation
 - **CRITICAL**: etcd stores all cluster secrets and topology
 
 ### 6. **PgBouncer Security**
+
 ✅ **SCRAM-SHA-256** authentication:
+
 ```ini
 auth_type = scram-sha-256
 auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
 ```
 
 ### 7. **Strong Password Requirements**
+
 ✅ **Mandatory password complexity**:
+
 - Minimum 16 characters
 - Mix of uppercase, lowercase, numbers, symbols
 - Generated with `openssl rand -base64 32`
@@ -60,12 +74,15 @@ auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
 ## 🚨 Critical CVE Status
 
 ### PostgreSQL 18.1 → 18.2+ Required
+
 **CVE-2025-8714** (CVSS 8.8 HIGH):
+
 - Affects: pg_dump arbitrary code execution
 - Impact: Malicious dumps can execute code during restore
 - **Action Required**: Upgrade to PostgreSQL 18.2+ immediately
 
 **Other Recent CVEs Fixed:**
+
 - CVE-2025-4207: Optimizer statistics exposure (18.5+)
 - CVE-2025-1094: GB18030 encoding vulnerability (18.3+)
 - CVE-2024-10979: Quoting API validation bypass (18.1+)
@@ -76,6 +93,7 @@ auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
 ### Pre-Deployment
 
 - [ ] **Generate strong passwords** for all accounts:
+
 ```bash
 # PostgreSQL superuser
 openssl rand -base64 32 > /tmp/pg_superuser_pass
@@ -97,6 +115,7 @@ openssl rand -base64 24 > /tmp/grafana_admin_pass
 ```
 
 - [ ] **Configure `.env` file** with generated passwords:
+
 ```bash
 cp .env.example .env
 nano .env
@@ -104,18 +123,21 @@ nano .env
 ```
 
 - [ ] **Verify SSL is enabled**:
+
 ```bash
 grep POSTGRESQL_SSL_ENABLED .env
 # Should be: POSTGRESQL_SSL_ENABLED=true
 ```
 
 - [ ] **Verify authentication is enabled**:
+
 ```bash
 grep -E "(ETCD_AUTH_ENABLED|PATRONI_RESTAPI_AUTH_ENABLED)" .env
 # Both should be: true
 ```
 
 - [ ] **Review network configuration**:
+
 ```bash
 grep CLUSTER_NETWORK .env
 # Ensure it matches your actual cluster subnet
@@ -124,11 +146,13 @@ grep CLUSTER_NETWORK .env
 ### Post-Deployment
 
 - [ ] **Test SSL connections**:
+
 ```bash
 psql "postgresql://admin@<node-ip>:5432/postgres?sslmode=require"
 ```
 
 - [ ] **Verify Patroni API auth**:
+
 ```bash
 # Should fail without credentials
 curl http://<node-ip>:8008/patroni
@@ -138,12 +162,14 @@ curl -u patroni_admin:<password> http://<node-ip>:8008/patroni
 ```
 
 - [ ] **Check firewall rules**:
+
 ```bash
 ssh root@<node-ip> "ufw status"
 # Verify only required ports are open
 ```
 
 - [ ] **Audit user permissions**:
+
 ```bash
 psql -U postgres -c "\du"
 # Verify no unexpected superusers
@@ -152,6 +178,7 @@ psql -U postgres -c "\du"
 - [ ] **Change Grafana password** on first login
 
 - [ ] **Enable audit logging** (optional but recommended):
+
 ```sql
 ALTER SYSTEM SET log_connections = 'on';
 ALTER SYSTEM SET log_disconnections = 'on';
@@ -161,7 +188,8 @@ SELECT pg_reload_conf();
 
 ## 🔥 Common Security Mistakes to Avoid
 
-### ❌ DON'T:
+### ❌ DON'T
+
 1. **Use weak/default passwords**
    - ❌ `admin123`, `password`, `postgres`
    - ✅ Use `openssl rand -base64 32`
@@ -228,6 +256,7 @@ chown postgres:postgres /etc/postgresql/ssl/*
 ```
 
 **Update `.env`:**
+
 ```bash
 POSTGRESQL_SSL_CERT_FILE=/etc/postgresql/ssl/<node>.crt
 POSTGRESQL_SSL_KEY_FILE=/etc/postgresql/ssl/<node>.key
@@ -237,6 +266,7 @@ POSTGRESQL_SSL_CA_FILE=/etc/postgresql/ssl/root.crt
 ### 2. etcd TLS Configuration
 
 **Generate etcd certificates:**
+
 ```bash
 # Create etcd SSL directory
 mkdir -p /etc/etcd/ssl
@@ -264,6 +294,7 @@ done
 ```
 
 **Update etcd.conf.j2:**
+
 ```yaml
 ETCD_LISTEN_CLIENT_URLS="https://{{ ansible_host }}:2379"
 ETCD_LISTEN_PEER_URLS="https://{{ ansible_host }}:2380"
@@ -278,6 +309,7 @@ ETCD_PEER_TRUSTED_CA_FILE="/etc/etcd/ssl/ca.crt"
 ### 3. Prometheus/Grafana HTTPS
 
 **Nginx reverse proxy** with Let's Encrypt:
+
 ```nginx
 server {
     listen 443 ssl http2;
@@ -297,15 +329,16 @@ server {
 ### 4. Network Segmentation
 
 **Firewall rules** (UFW example):
+
 ```bash
 # PostgreSQL - cluster nodes only
-ufw allow from 172.23.202.0/24 to any port 5432 proto tcp
+ufw allow from $CLUSTER_NETWORK to any port 5432 proto tcp
 
 # PgBouncer - application servers only
 ufw allow from <app_subnet>/24 to any port 6432 proto tcp
 
 # etcd - cluster nodes only
-ufw allow from 172.23.202.0/24 to any port 2379,2380 proto tcp
+ufw allow from $CLUSTER_NETWORK to any port 2379,2380 proto tcp
 
 # Patroni API - monitoring server only
 ufw allow from <monitoring_ip> to any port 8008 proto tcp
@@ -323,6 +356,7 @@ ufw enable
 ### 5. Audit Logging
 
 **Enable pgAudit extension**:
+
 ```sql
 CREATE EXTENSION pgaudit;
 
@@ -335,6 +369,7 @@ SELECT pg_reload_conf();
 ```
 
 **Monitor logs**:
+
 ```bash
 tail -f /var/log/postgresql/postgresql-*.log | grep AUDIT
 ```
@@ -342,6 +377,7 @@ tail -f /var/log/postgresql/postgresql-*.log | grep AUDIT
 ### 6. Intrusion Detection
 
 **Install fail2ban**:
+
 ```bash
 apt install fail2ban
 
@@ -363,6 +399,7 @@ bantime = 3600
 ### 7. Secrets Management
 
 **Use Ansible Vault** for `.env` encryption:
+
 ```bash
 # Encrypt .env
 ansible-vault encrypt .env
@@ -377,6 +414,7 @@ ansible-vault encrypt .env
 ```
 
 **Or use HashiCorp Vault**:
+
 ```bash
 # Store secrets in Vault
 vault kv put secret/postgres/superuser password=$(openssl rand -base64 32)
@@ -392,19 +430,22 @@ vars:
 ### Metrics to Monitor
 
 1. **Failed login attempts**:
+
 ```sql
 SELECT count(*) FROM pg_stat_activity 
 WHERE state = 'idle in transaction failed';
 ```
 
-2. **Superuser connections**:
+1. **Superuser connections**:
+
 ```sql
 SELECT usename, client_addr, backend_start 
 FROM pg_stat_activity 
 WHERE usesysid = 10;
 ```
 
-3. **SSL connection ratio**:
+1. **SSL connection ratio**:
+
 ```sql
 SELECT 
   count(*) FILTER (WHERE ssl = true) AS ssl_connections,
@@ -412,7 +453,8 @@ SELECT
 FROM pg_stat_ssl;
 ```
 
-4. **Patroni failover events**:
+1. **Patroni failover events**:
+
 ```bash
 journalctl -u patroni | grep -i "failover"
 ```
@@ -420,6 +462,7 @@ journalctl -u patroni | grep -i "failover"
 ### Alerting Rules
 
 Check `roles/prometheus/templates/alert_rules.yml.j2` for:
+
 - `PostgreSQLDown`
 - `PostgreSQLTooManyConnections`
 - `PatroniNoLeader`
@@ -431,33 +474,38 @@ Check `roles/prometheus/templates/alert_rules.yml.j2` for:
 ### Suspected Breach
 
 1. **Immediately change all passwords**:
+
 ```bash
 psql -U postgres -c "ALTER USER postgres PASSWORD '<new_password>';"
 psql -U postgres -c "ALTER USER replicator PASSWORD '<new_password>';"
 psql -U postgres -c "ALTER USER admin PASSWORD '<new_password>';"
 ```
 
-2. **Review connections**:
+1. **Review connections**:
+
 ```sql
 SELECT pid, usename, client_addr, backend_start, state 
 FROM pg_stat_activity 
 WHERE client_addr IS NOT NULL;
 ```
 
-3. **Terminate suspicious connections**:
+1. **Terminate suspicious connections**:
+
 ```sql
 SELECT pg_terminate_backend(pid) 
 FROM pg_stat_activity 
 WHERE client_addr = '<suspicious_ip>';
 ```
 
-4. **Review audit logs**:
+1. **Review audit logs**:
+
 ```bash
 grep -i "authentication failed" /var/log/postgresql/*.log
 grep -i "FATAL" /var/log/postgresql/*.log
 ```
 
-5. **Enable connection logging temporarily**:
+1. **Enable connection logging temporarily**:
+
 ```sql
 ALTER SYSTEM SET log_connections = 'on';
 ALTER SYSTEM SET log_disconnections = 'on';
@@ -485,22 +533,26 @@ SELECT pg_reload_conf();
 ## 🔄 Regular Security Tasks
 
 ### Daily
+
 - [ ] Review failed login attempts
 - [ ] Check for unusual connection patterns
 - [ ] Monitor replication lag
 
 ### Weekly
+
 - [ ] Review user permissions
 - [ ] Check for CVE updates
 - [ ] Rotate backup encryption keys
 
 ### Monthly
+
 - [ ] Password rotation (optional, if policy requires)
 - [ ] SSL certificate expiry check
 - [ ] Security patch updates
 - [ ] Audit log review
 
 ### Quarterly
+
 - [ ] Full security audit
 - [ ] Penetration testing
 - [ ] Disaster recovery drill
@@ -509,8 +561,9 @@ SELECT pg_reload_conf();
 ## 📞 Support
 
 For security issues:
-- PostgreSQL Security: security@postgresql.org
-- CVE Database: https://www.postgresql.org/support/security/
-- Project Issues: https://github.com/xdev-asia-labs/postgres-patroni-etcd-install/issues
+
+- PostgreSQL Security: <security@postgresql.org>
+- CVE Database: <https://www.postgresql.org/support/security/>
+- Project Issues: <https://github.com/xdev-asia-labs/postgres-patroni-etcd-install/issues>
 
 **NEVER** disclose security vulnerabilities publicly. Report privately first.

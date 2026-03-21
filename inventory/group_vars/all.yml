@@ -6,7 +6,7 @@
 # =============================================================================
 # NETWORK SETTINGS
 # =============================================================================
-cluster_network: "{{ lookup('env', 'CLUSTER_NETWORK') | default('172.23.202.0/24', true) }}"
+cluster_network: "{{ lookup('env', 'CLUSTER_NETWORK') | default('10.0.0.0/24', true) }}"
 cluster_netmask: "{{ lookup('env', 'CLUSTER_NETMASK') | default('255.255.255.0', true) }}"
 
 # =============================================================================
@@ -119,6 +119,32 @@ patroni_scripts_dir: "{{ lookup('env', 'PATRONI_SCRIPTS_DIR') | default('/etc/pa
 patroni_watchdog_mode: "{{ lookup('env', 'PATRONI_WATCHDOG_MODE') | default('off', true) }}"
 
 # =============================================================================
+# PGBACKREST SETTINGS
+# =============================================================================
+pgbackrest_enabled: "{{ lookup('env', 'PGBACKREST_ENABLED') | default('false', true) | bool }}"
+pgbackrest_stanza: "{{ lookup('env', 'PGBACKREST_STANZA') | default('main', true) }}"
+pgbackrest_repo_path: "{{ lookup('env', 'PGBACKREST_REPO_PATH') | default('/var/lib/pgbackrest', true) }}"
+pgbackrest_log_path: "{{ lookup('env', 'PGBACKREST_LOG_PATH') | default('/var/log/pgbackrest', true) }}"
+pgbackrest_config_dir: "{{ lookup('env', 'PGBACKREST_CONFIG_DIR') | default('/etc/pgbackrest', true) }}"
+pgbackrest_spool_path: "{{ lookup('env', 'PGBACKREST_SPOOL_PATH') | default('/var/spool/pgbackrest', true) }}"
+pgbackrest_retention_full_type: "{{ lookup('env', 'PGBACKREST_RETENTION_FULL_TYPE') | default('time', true) }}"
+pgbackrest_retention_full: "{{ lookup('env', 'PGBACKREST_RETENTION_FULL') | default('7', true) | int }}"
+pgbackrest_retention_diff: "{{ lookup('env', 'PGBACKREST_RETENTION_DIFF') | default('7', true) | int }}"
+pgbackrest_compress_type: "{{ lookup('env', 'PGBACKREST_COMPRESS_TYPE') | default('zst', true) }}"
+pgbackrest_compress_level: "{{ lookup('env', 'PGBACKREST_COMPRESS_LEVEL') | default('3', true) | int }}"
+pgbackrest_process_max: "{{ lookup('env', 'PGBACKREST_PROCESS_MAX') | default('2', true) | int }}"
+pgbackrest_full_schedule: "{{ lookup('env', 'PGBACKREST_FULL_SCHEDULE') | default('0 1 * * 0', true) }}"
+pgbackrest_diff_schedule: "{{ lookup('env', 'PGBACKREST_DIFF_SCHEDULE') | default('0 1 * * 1-6', true) }}"
+pgbackrest_incr_schedule: "{{ lookup('env', 'PGBACKREST_INCR_SCHEDULE') | default('0 */6 * * *', true) }}"
+
+# =============================================================================
+# TELEGRAM NOTIFICATION SETTINGS
+# =============================================================================
+telegram_enabled: "{{ lookup('env', 'TELEGRAM_ENABLED') | default('false', true) | bool }}"
+telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN') | default('', true) }}"
+telegram_chat_id: "{{ lookup('env', 'TELEGRAM_CHAT_ID') | default('', true) }}"
+
+# =============================================================================
 # HAPROXY SETTINGS
 # =============================================================================
 haproxy_enabled: "{{ lookup('env', 'HAPROXY_ENABLED') | default('false', true) | bool }}"
@@ -129,7 +155,7 @@ haproxy_enabled: "{{ lookup('env', 'HAPROXY_ENABLED') | default('false', true) |
 pgbouncer_enabled: "{{ lookup('env', 'PGBOUNCER_ENABLED') | default('true', true) | bool }}"
 pgbouncer_listen_port: "{{ lookup('env', 'PGBOUNCER_LISTEN_PORT') | default('6432', true) | int }}"
 pgbouncer_listen_addr: "{{ lookup('env', 'PGBOUNCER_LISTEN_ADDR') | default('*', true) }}"
-pgbouncer_auth_type: "{{ lookup('env', 'PGBOUNCER_AUTH_TYPE') | default('md5', true) }}"
+pgbouncer_auth_type: "{{ lookup('env', 'PGBOUNCER_AUTH_TYPE') | default('scram-sha-256', true) }}"
 pgbouncer_pool_mode: "{{ lookup('env', 'PGBOUNCER_POOL_MODE') | default('transaction', true) }}"
 pgbouncer_max_client_conn: "{{ lookup('env', 'PGBOUNCER_MAX_CLIENT_CONN') | default('1000', true) | int }}"
 pgbouncer_default_pool_size: "{{ lookup('env', 'PGBOUNCER_DEFAULT_POOL_SIZE') | default('25', true) | int }}"
@@ -176,7 +202,7 @@ app_db_lc_ctype: "{{ lookup('env', 'APP_DB_LC_CTYPE') | default('en_US.UTF-8', t
 # =============================================================================
 # Monitoring Control
 monitoring_enabled: "{{ lookup('env', 'MONITORING_ENABLED') | default('false', true) | bool }}"
-monitoring_server_ip: "{{ lookup('env', 'MONITORING_SERVER_IP') | default('172.23.202.11', true) }}"
+monitoring_server_ip: "{{ lookup('env', 'MONITORING_SERVER_IP') | default('10.0.0.22', true) }}"
 monitoring_server_name: "{{ lookup('env', 'MONITORING_SERVER_NAME') | default('pg-node1', true) }}"
 
 # Prometheus

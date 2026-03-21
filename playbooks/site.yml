@@ -106,6 +106,21 @@
     - role: pgbouncer
 
 # =============================================================================
+# PGBACKREST BACKUP INFRASTRUCTURE
+# =============================================================================
+- name: Setup pgBackRest on backup server and PG nodes
+  hosts: backup:postgres
+  become: yes
+  gather_facts: yes
+  tags:
+    - pgbackrest
+    - backup
+
+  roles:
+    - role: pgbackrest
+      when: pgbackrest_enabled | default(false)
+
+# =============================================================================
 # HAPROXY LOAD BALANCER - DISABLED
 # =============================================================================
 # HAProxy is disabled - Applications connect directly to PgBouncer

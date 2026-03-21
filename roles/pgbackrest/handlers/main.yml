@@ -1,0 +1,6 @@
+---
+# pgBackRest handlers
+
+- name: Restart pgbackrest
+  shell: echo "pgBackRest does not run as a daemon - no restart needed"
+  changed_when: false

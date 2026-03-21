@@ -1,0 +1,24 @@
+---
+# pgBackRest role defaults
+
+pgbackrest_stanza: "main"
+pgbackrest_repo_path: "/var/lib/pgbackrest"
+pgbackrest_log_path: "/var/log/pgbackrest"
+pgbackrest_config_dir: "/etc/pgbackrest"
+pgbackrest_spool_path: "/var/spool/pgbackrest"
+
+# Retention
+pgbackrest_retention_full: 2
+pgbackrest_retention_diff: 7
+
+# Compression
+pgbackrest_compress_type: "zst"
+pgbackrest_compress_level: 3
+
+# Parallelism
+pgbackrest_process_max: 2
+
+# Backup schedule (cron)
+pgbackrest_full_schedule: "0 1 * * 0"
+pgbackrest_diff_schedule: "0 1 * * 1-6"
+pgbackrest_incr_schedule: "0 */6 * * *"
