@@ -1,0 +1,15 @@
+---
+# playbooks/data/postgres-backup.yml
+# Configure pgBackRest continuous backup for PostgreSQL cluster
+#
+# Usage:
+#   ansible-playbook playbooks/data/postgres-backup.yml
+
+- name: Deploy pgBackRest backup solution
+  hosts: postgres
+  become: yes
+  roles:
+    - role: pgbackrest
+      tags: backup
+    - role: backup-manager
+      tags: backup, manager

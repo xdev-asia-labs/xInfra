@@ -1,9 +1,13 @@
-# .gitignore for PostgreSQL HA Ansible project
+# xInfra — Ansible Monorepo
 
-# Ansible
+# Environment secrets (never commit)
+.env
+
+# Ansible artifacts
 *.retry
+ansible.log
 .ansible/
-/tmp/
+/tmp/xinfra_facts_cache/
 
 # Ansible Galaxy
 roles/requirements.yml.lock
@@ -16,10 +20,13 @@ secrets/
 *.pem
 *.key
 *.crt
-.env
+id_rsa
+id_ed25519
 
-# Inventory files with sensitive IPs/hostnames
+# Inventory (never commit real hosts)
 inventory/hosts.yml
+inventory/production/hosts.yml
+inventory/staging/hosts.yml
 
 # Python
 *.pyc
@@ -28,6 +35,11 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
 ENV/
 
 # IDE

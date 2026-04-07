@@ -1,0 +1,41 @@
+---
+# playbooks/platform/seaweedfs.yml
+# Deploy SeaweedFS distributed object storage
+#
+# Usage:
+#   ansible-playbook playbooks/platform/seaweedfs.yml
+#   ansible-playbook playbooks/platform/seaweedfs.yml --tags master
+
+- name: Preflight checks
+  hosts: seaweedfs_cluster
+  gather_facts: yes
+  tasks:
+    - name: Check connectivity
+      ping:
+
+- name: Deploy SeaweedFS master nodes
+  hosts: seaweedfs_master
+  become: yes
+  roles:
+    - role: seaweedfs
+      vars:
+        seaweedfs_component: master
+      tags: master
+
+- name: Deploy SeaweedFS volume nodes
+  hosts: seaweedfs_volume
+  become: yes
+  roles:
+    - role: seaweedfs
+      vars:
+        seaweedfs_component: volume
+      tags: volume
+
+- name: Deploy SeaweedFS filer nodes
+  hosts: seaweedfs_filer
+  become: yes
+  roles:
+    - role: seaweedfs
+      vars:
+        seaweedfs_component: filer
+      tags: filer

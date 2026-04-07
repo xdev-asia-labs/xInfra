@@ -1,0 +1,14 @@
+---
+# Kafka + ZooKeeper cluster variables
+kafka_version: "{{ lookup('env', 'KAFKA_VERSION') | default('3.6.1') }}"
+scala_version: "{{ lookup('env', 'SCALA_VERSION') | default('2.13') }}"
+zookeeper_version: "{{ lookup('env', 'ZOOKEEPER_VERSION') | default('3.8.3') }}"
+java_version: "17"
+
+kafka_ssl_enabled: "{{ lookup('env', 'KAFKA_SSL_ENABLED') | default('false') | bool }}"
+kafka_sasl_enabled: "{{ lookup('env', 'KAFKA_SASL_ENABLED') | default('false') | bool }}"
+configure_firewall: "{{ firewall_enabled }}"
+
+kafka_heap_size: 8g
+kafka_data_disks:
+  - /data/kafka

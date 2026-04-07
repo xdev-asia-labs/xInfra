@@ -1,0 +1,20 @@
+---
+# PostgreSQL HA (Patroni + etcd) variables
+postgresql_version: "{{ lookup('env', 'POSTGRESQL_VERSION') | default('16') }}"
+postgresql_port: 5432
+postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_version }}/data"
+postgresql_bin_dir: "/usr/lib/postgresql/{{ postgresql_version }}/bin"
+postgresql_config_dir: "/etc/postgresql/{{ postgresql_version }}"
+
+postgresql_superuser: "{{ lookup('env', 'POSTGRESQL_SUPERUSER') | default('postgres') }}"
+postgresql_superuser_password: "{{ lookup('env', 'POSTGRESQL_SUPERUSER_PASSWORD') }}"
+postgresql_replication_user: "{{ lookup('env', 'POSTGRESQL_REPLICATION_USER') | default('replicator') }}"
+postgresql_replication_password: "{{ lookup('env', 'POSTGRESQL_REPLICATION_PASSWORD') }}"
+postgresql_admin_user: "{{ lookup('env', 'POSTGRESQL_ADMIN_USER') | default('admin') }}"
+postgresql_admin_password: "{{ lookup('env', 'POSTGRESQL_ADMIN_PASSWORD') }}"
+
+patroni_scope: "{{ lookup('env', 'PATRONI_SCOPE') | default('pg-cluster') }}"
+patroni_port: 8008
+pgbouncer_port: 5433
+
+cluster_network: "{{ lookup('env', 'CLUSTER_NETWORK') | default('192.168.1.0/24') }}"

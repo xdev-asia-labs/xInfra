@@ -1,0 +1,55 @@
+---
+# playbooks/platform/kafka.yml
+# Deploy Apache Kafka cluster with ZooKeeper
+#
+# Usage:
+#   ansible-playbook playbooks/platform/kafka.yml
+#   ansible-playbook playbooks/platform/kafka.yml --tags kafka
+#   ansible-playbook playbooks/platform/kafka.yml --limit kafka-01
+
+- name: Preflight checks
+  hosts: kafka_brokers
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Check connectivity
+      ping:
+    - name: Verify OS compatibility
+      assert:
+        that: ansible_os_family in ["Debian", "RedHat"]
+        fail_msg: "Kafka cookbook requires Ubuntu/Debian or RHEL/CentOS"
+
+- name: Install Java runtime
+  hosts: kafka_brokers
+  become: yes
+  roles:
+    - role: java
+      tags: java
+
+- name: Deploy ZooKeeper ensemble
+  hosts: zookeeper
+  become: yes
+  roles:
+    - role: zookeeper
+      tags: zookeeper
+
+- name: Deploy Kafka brokers
+  hosts: kafka_brokers
+  become: yes
+  roles:
+    - role: kafka
+      tags: kafka
+
+- name: Deploy load balancer
+  hosts: kafka_brokers[0]
+  become: yes
+  roles:
+    - role: loadbalancer
+      tags: loadbalancer
+
+- name: Deploy monitoring exporters
+  hosts: kafka_brokers
+  become: yes
+  roles:
+    - role: monitoring
+      tags: monitoring

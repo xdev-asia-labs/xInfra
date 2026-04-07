@@ -1,0 +1,15 @@
+---
+# KVM Hypervisor layer variables
+ansible_become: yes
+
+vxlan_id: "{{ lookup('env', 'VXLAN_ID') | default(100) | int }}"
+bridge_name: "{{ lookup('env', 'BRIDGE_NAME') | default('br0') }}"
+vm_network: "{{ lookup('env', 'VM_NETWORK') | default('10.10.10.0/24') }}"
+
+storage_pool_name: default
+storage_pool_path: /var/lib/libvirt/images
+
+cockpit_packages:
+  - cockpit
+  - cockpit-machines
+  - cockpit-networkmanager

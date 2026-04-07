@@ -1,0 +1,8 @@
+---
+# SeaweedFS distributed storage variables
+seaweedfs_version: "{{ lookup('env', 'SEAWEEDFS_VERSION') | default('3.68') }}"
+seaweedfs_master_port: "{{ lookup('env', 'SEAWEEDFS_MASTER_PORT') | default(9333) | int }}"
+seaweedfs_volume_port: "{{ lookup('env', 'SEAWEEDFS_VOLUME_PORT') | default(8080) | int }}"
+seaweedfs_filer_port: 8888
+seaweedfs_data_dir: /data/seaweedfs
+seaweedfs_replication: "001"   # 1 copy on 1 rack in 0 datacenters

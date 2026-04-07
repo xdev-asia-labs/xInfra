@@ -1,0 +1,15 @@
+---
+# RKE2 Kubernetes cluster variables
+rke2_version: "{{ lookup('env', 'RKE2_VERSION') | default('v1.30.0+rke2r1') }}"
+rke2_vip: "{{ lookup('env', 'K8S_VIP') | default('192.168.1.100') }}"
+
+rke2_tls_san:
+  - "{{ rke2_vip }}"
+
+rke2_disable:
+  - rke2-ingress-nginx
+
+rke2_server_node_taints: []
+
+rke2_kubelet_args:
+  - "max-pods=110"

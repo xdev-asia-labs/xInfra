@@ -1,0 +1,47 @@
+---
+# playbooks/infra/kvm.yml
+# Deploy KVM hypervisors with VXLAN overlay and Cockpit management UI
+#
+# Usage:
+#   ansible-playbook playbooks/infra/kvm.yml
+#   ansible-playbook playbooks/infra/kvm.yml --tags cockpit
+#   ansible-playbook playbooks/infra/kvm.yml --limit kvm-01
+
+- name: Preflight checks
+  hosts: kvm_hosts
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Verify OS is Ubuntu/Debian
+      assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "KVM cookbook requires Ubuntu/Debian"
+    - name: Check virtualization support
+      command: egrep -c '(vmx|svm)' /proc/cpuinfo
+      register: virt_support
+      changed_when: false
+    - name: Fail if no hardware virtualization
+      assert:
+        that: virt_support.stdout | int > 0
+        fail_msg: "Hardware virtualization (VT-x/AMD-V) not available on {{ inventory_hostname }}"
+
+- name: Install KVM and base packages
+  hosts: kvm_hosts
+  become: yes
+  roles:
+    - role: common
+      tags: common
+    - role: kvm_install
+      tags: kvm
+    - role: nested_virtualization
+      tags: kvm, nested
+    - role: network_bridge
+      tags: network
+    - role: vxlan_overlay
+      tags: network, vxlan
+    - role: virtual_networks
+      tags: network
+    - role: storage_pool
+      tags: storage
+    - role: cockpit
+      tags: cockpit

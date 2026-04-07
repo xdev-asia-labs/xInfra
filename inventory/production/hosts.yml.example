@@ -1,0 +1,129 @@
+---
+# xInfra Production Inventory
+# 1. Copy this file: cp hosts.yml.example hosts.yml
+# 2. Fill in your actual IPs and credentials
+# 3. Never commit hosts.yml (it is in .gitignore)
+
+all:
+  vars:
+    ansible_user: "{{ lookup('env', 'ANSIBLE_USER') | default('ubuntu') }}"
+    ansible_ssh_private_key_file: "{{ lookup('env', 'SSH_PRIVATE_KEY') | default('~/.ssh/id_rsa') }}"
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new"
+
+  children:
+
+    # =============================================
+    # LAYER 1: Bare-metal / Hypervisor
+    # =============================================
+    kvm_hosts:
+      hosts:
+        kvm-01:
+          ansible_host: 192.168.1.10
+          host_ip: 192.168.1.10
+          vxlan_remote_ip: 192.168.1.11
+          vm_ip_range_start: 100
+          vm_ip_range_end: 149
+        kvm-02:
+          ansible_host: 192.168.1.11
+          host_ip: 192.168.1.11
+          vxlan_remote_ip: 192.168.1.10
+          vm_ip_range_start: 150
+          vm_ip_range_end: 199
+
+    # =============================================
+    # LAYER 2: Kubernetes (RKE2)
+    # =============================================
+    master:
+      hosts:
+        k8s-master-01:
+          ansible_host: 192.168.1.101
+        k8s-master-02:
+          ansible_host: 192.168.1.102
+        k8s-master-03:
+          ansible_host: 192.168.1.103
+
+    worker:
+      hosts:
+        k8s-worker-01:
+          ansible_host: 192.168.1.111
+        k8s-worker-02:
+          ansible_host: 192.168.1.112
+
+    rke2_cluster:
+      children:
+        master:
+        worker:
+
+    # =============================================
+    # LAYER 3: Kafka
+    # =============================================
+    kafka_brokers:
+      hosts:
+        kafka-01:
+          ansible_host: 192.168.1.121
+          kafka_broker_id: 1
+          zookeeper_myid: 1
+        kafka-02:
+          ansible_host: 192.168.1.122
+          kafka_broker_id: 2
+          zookeeper_myid: 2
+        kafka-03:
+          ansible_host: 192.168.1.123
+          kafka_broker_id: 3
+          zookeeper_myid: 3
+
+    zookeeper:
+      children:
+        kafka_brokers:
+
+    # =============================================
+    # LAYER 4: PostgreSQL HA (Patroni + etcd)
+    # =============================================
+    postgres:
+      hosts:
+        pg-node1:
+          ansible_host: "{{ lookup('env', 'NODE1_IP') | default('192.168.1.21') }}"
+          target_hostname: pg-node1
+          patroni_name: node1
+          etcd_name: etcd1
+        pg-node2:
+          ansible_host: "{{ lookup('env', 'NODE2_IP') | default('192.168.1.22') }}"
+          target_hostname: pg-node2
+          patroni_name: node2
+          etcd_name: etcd2
+        pg-node3:
+          ansible_host: "{{ lookup('env', 'NODE3_IP') | default('192.168.1.23') }}"
+          target_hostname: pg-node3
+          patroni_name: node3
+          etcd_name: etcd3
+
+    # =============================================
+    # LAYER 5: SeaweedFS
+    # =============================================
+    seaweedfs_master:
+      hosts:
+        seaweedfs-master-01:
+          ansible_host: 192.168.1.131
+        seaweedfs-master-02:
+          ansible_host: 192.168.1.132
+        seaweedfs-master-03:
+          ansible_host: 192.168.1.133
+
+    seaweedfs_volume:
+      hosts:
+        seaweedfs-vol-01:
+          ansible_host: 192.168.1.141
+        seaweedfs-vol-02:
+          ansible_host: 192.168.1.142
+
+    seaweedfs_filer:
+      hosts:
+        seaweedfs-filer-01:
+          ansible_host: 192.168.1.151
+
+    seaweedfs_cluster:
+      children:
+        seaweedfs_master:
+        seaweedfs_volume:
+        seaweedfs_filer:

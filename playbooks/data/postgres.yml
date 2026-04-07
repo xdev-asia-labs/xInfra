@@ -1,0 +1,60 @@
+---
+# playbooks/data/postgres.yml
+# Deploy PostgreSQL HA cluster: etcd + Patroni + pgBouncer
+#
+# Usage:
+#   ansible-playbook playbooks/data/postgres.yml
+#   ansible-playbook playbooks/data/postgres.yml --tags patroni
+
+- name: Preflight checks
+  hosts: postgres
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Check connectivity
+      ping:
+    - name: Verify exact 3-node cluster
+      assert:
+        that: groups['postgres'] | length == 3
+        fail_msg: "Patroni HA requires exactly 3 nodes (got {{ groups['postgres'] | length }})"
+    - name: Verify OS
+      assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "PostgreSQL cookbook requires Ubuntu/Debian"
+
+- name: Bootstrap common system settings
+  hosts: postgres
+  become: yes
+  roles:
+    - role: common
+      tags: common
+
+- name: Deploy etcd cluster
+  hosts: postgres
+  become: yes
+  roles:
+    - role: etcd
+      tags: etcd
+
+- name: Deploy PostgreSQL + Patroni
+  hosts: postgres
+  become: yes
+  roles:
+    - role: postgresql
+      tags: postgresql
+    - role: patroni
+      tags: patroni
+
+- name: Deploy pgBouncer connection pooler
+  hosts: postgres
+  become: yes
+  roles:
+    - role: pgbouncer
+      tags: pgbouncer
+
+- name: Deploy monitoring exporters
+  hosts: postgres
+  become: yes
+  roles:
+    - role: exporters
+      tags: monitoring, exporters

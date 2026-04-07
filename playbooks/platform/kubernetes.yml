@@ -1,0 +1,58 @@
+---
+# playbooks/platform/kubernetes.yml
+# Deploy RKE2 HA Kubernetes cluster
+#
+# Usage:
+#   ansible-playbook playbooks/platform/kubernetes.yml
+#   ansible-playbook playbooks/platform/kubernetes.yml --tags monitoring
+
+- name: Load cluster variables
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../cookbooks/kubernetes-cookbook/vars/registry.yml
+  tasks:
+    - name: Propagate registry facts to all cluster nodes
+      ansible.builtin.set_fact:
+        registries: "{{ registries }}"
+        registry_mirrors: "{{ registry_mirrors }}"
+        insecure_registries: "{{ insecure_registries }}"
+        rke2_tls_san: "{{ rke2_tls_san }}"
+        rke2_disable: "{{ rke2_disable }}"
+        rke2_server_node_taints: "{{ rke2_server_node_taints }}"
+        rke2_kubelet_args: "{{ rke2_kubelet_args }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['rke2_cluster'] }}"
+
+- name: Prepare all nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - role: prereq
+      tags: prereq
+
+- name: Deploy RKE2 server (control-plane) nodes
+  hosts: master
+  become: true
+  gather_facts: true
+  roles:
+    - role: rke2-server
+      tags: server
+
+- name: Deploy RKE2 agent (worker) nodes
+  hosts: worker
+  become: true
+  gather_facts: true
+  roles:
+    - role: rke2-agent
+      tags: agent
+
+- name: Deploy cluster monitoring stack
+  hosts: master[0]
+  become: true
+  gather_facts: true
+  roles:
+    - role: monitoring
+      tags: monitoring
