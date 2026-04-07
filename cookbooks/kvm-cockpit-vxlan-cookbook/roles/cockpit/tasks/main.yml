@@ -1,0 +1,35 @@
+---
+- name: Install Cockpit packages
+  apt:
+    name: "{{ cockpit_packages }}"
+    state: present
+    update_cache: yes
+
+- name: Enable and start Cockpit socket
+  systemd:
+    name: cockpit.socket
+    enabled: yes
+    state: started
+
+- name: Check Cockpit status
+  systemd:
+    name: cockpit.socket
+  register: cockpit_status
+
+- name: Display Cockpit status
+  debug:
+    msg: "Cockpit is {{ cockpit_status.status.ActiveState }}"
+
+- name: Open firewall for Cockpit (if firewall enabled)
+  ufw:
+    rule: allow
+    port: "{{ cockpit_port }}"
+    proto: tcp
+  when: enable_firewall | bool
+
+- name: Display Cockpit access information
+  debug:
+    msg:
+      - "Cockpit Web UI is available at:"
+      - "https://{{ host_ip }}:{{ cockpit_port }}"
+      - "Login with your Linux user credentials"

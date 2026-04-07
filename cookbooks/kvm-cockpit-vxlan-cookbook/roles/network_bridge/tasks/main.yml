@@ -1,0 +1,40 @@
+---
+- name: Backup existing netplan configuration
+  shell: |
+    mkdir -p /etc/netplan/backup
+    cp /etc/netplan/*.yaml /etc/netplan/backup/ 2>/dev/null || true
+  args:
+    creates: /etc/netplan/backup
+
+- name: Get network interface name
+  shell: "ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -n1"
+  register: detected_interface
+  changed_when: false
+  when: primary_interface is not defined or primary_interface == ''
+
+- name: Set interface name
+  set_fact:
+    network_interface: "{{ primary_interface if (primary_interface is defined and primary_interface != '') else detected_interface.stdout }}"
+
+- name: Display network interface being configured
+  debug:
+    msg: "Configuring bridge for interface: {{ network_interface }}"
+
+- name: Create netplan bridge configuration
+  template:
+    src: 01-bridge-config.yaml.j2
+    dest: /etc/netplan/01-bridge-config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  # notify: apply netplan  # Disabled to prevent network disconnection over SSH
+
+- name: Test netplan configuration
+  command: netplan try --timeout=10
+  register: netplan_test
+  changed_when: false
+  failed_when: false
+
+- name: Display netplan test result
+  debug:
+    msg: "{{ netplan_test.stdout_lines }}"

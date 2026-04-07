@@ -1,0 +1,49 @@
+---
+# Main tasks for monitoring role
+# This role installs Prometheus, Grafana, and Node Exporter
+
+- name: Include prerequisite tasks
+  ansible.builtin.include_tasks: prerequisites.yml
+
+- name: Include Node Exporter installation
+  ansible.builtin.include_tasks: node_exporter.yml
+
+- name: Include Prometheus installation
+  ansible.builtin.include_tasks: prometheus.yml
+
+- name: Include Loki installation
+  ansible.builtin.include_tasks: loki.yml
+
+- name: Include Tempo installation
+  ansible.builtin.include_tasks: tempo.yml
+
+- name: Include Grafana installation
+  ansible.builtin.include_tasks: grafana.yml
+
+- name: Include Grafana dashboards provisioning
+  ansible.builtin.include_tasks: grafana_dashboards.yml
+
+- name: Display monitoring URLs
+  ansible.builtin.debug:
+    msg:
+      - "=== Monitoring Stack Installed Successfully ==="
+      - "Prometheus: http://{{ ansible_host }}:9090"
+      - "Grafana: http://{{ ansible_host }}:3000 (admin/admin)"
+      - "Loki: http://{{ ansible_host }}:3100"
+      - "Node Exporter: http://{{ ansible_host }}:9100/metrics"
+      - ""
+      - "Dashboards auto-provisioned:"
+      - "  - Monitoring Overview (custom)"
+      - "  - Node Exporter Full (ID 1860)"
+      - "  - Kubernetes Cluster Monitoring (ID 315)"
+      - "  - Kubernetes Cluster Prometheus (ID 6417)"
+      - "  - Prometheus Stats (ID 2)"
+      - "  - Loki Logs (ID 13639)"
+      - "  - Loki & Promtail (ID 10880)"
+      - "  - Tempo APM (ID 15489)"
+      - "  - OTel Collector (ID 15983)"
+      - ""
+      - "Tempo: http://{{ ansible_host }}:3200"
+      - "OTel Collector endpoints (on each node):"
+      - "  OTLP gRPC: :4317  |  OTLP HTTP: :4318"
+      - "  Jaeger:    :14268 |  Zipkin: :9411"

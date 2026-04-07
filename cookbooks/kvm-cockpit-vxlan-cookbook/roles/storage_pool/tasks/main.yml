@@ -1,0 +1,52 @@
+---
+- name: Create storage pool directory
+  file:
+    path: "{{ storage_pool_path }}"
+    state: directory
+    owner: libvirt-qemu
+    group: kvm
+    mode: "0775"
+
+- name: Check if storage pool exists
+  command: virsh pool-list --all --name
+  register: existing_pools
+  changed_when: false
+
+- name: Define storage pool
+  command: >
+    virsh pool-define-as
+    --name {{ storage_pool_name }}
+    --type dir
+    --target {{ storage_pool_path }}
+  when: storage_pool_name not in existing_pools.stdout_lines
+
+- name: Build storage pool
+  command: virsh pool-build {{ storage_pool_name }}
+  when: storage_pool_name not in existing_pools.stdout_lines
+  ignore_errors: yes
+
+- name: Start storage pool
+  command: virsh pool-start {{ storage_pool_name }}
+  when: storage_pool_name not in existing_pools.stdout_lines
+  ignore_errors: yes
+
+- name: Enable autostart for storage pool
+  command: virsh pool-autostart {{ storage_pool_name }}
+
+- name: Get storage pool list
+  command: virsh pool-list --all
+  register: pool_list
+  changed_when: false
+
+- name: Display storage pool list
+  debug:
+    msg: "{{ pool_list.stdout_lines }}"
+
+- name: Get storage pool info
+  command: virsh pool-info {{ storage_pool_name }}
+  register: pool_info
+  changed_when: false
+
+- name: Display storage pool info
+  debug:
+    msg: "{{ pool_info.stdout_lines }}"

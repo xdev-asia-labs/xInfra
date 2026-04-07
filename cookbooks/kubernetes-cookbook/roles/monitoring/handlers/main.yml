@@ -1,0 +1,32 @@
+---
+# Monitoring role handlers
+
+- name: restart prometheus
+  ansible.builtin.systemd:
+    name: prometheus
+    state: restarted
+    daemon_reload: true
+
+- name: restart grafana
+  ansible.builtin.systemd:
+    name: grafana-server
+    state: restarted
+    daemon_reload: true
+
+- name: restart node_exporter
+  ansible.builtin.systemd:
+    name: node_exporter
+    state: restarted
+    daemon_reload: true
+
+- name: restart loki
+  ansible.builtin.systemd:
+    name: loki
+    state: restarted
+    daemon_reload: true
+
+- name: restart tempo
+  ansible.builtin.systemd:
+    name: tempo
+    state: restarted
+    daemon_reload: true

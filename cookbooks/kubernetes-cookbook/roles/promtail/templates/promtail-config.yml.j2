@@ -1,0 +1,132 @@
+# Promtail configuration
+# {{ ansible_managed }}
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: {{ loki_url }}/loki/api/v1/push
+    batchwait: 1s
+    batchsize: 1048576  # 1MB
+    timeout: 10s
+
+scrape_configs:
+  # System logs (syslog / journal)
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        job: systemd-journal
+        host: {{ ansible_hostname }}
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+      - source_labels: ['__journal__hostname']
+        target_label: 'hostname'
+      - source_labels: ['__journal_priority_keyword']
+        target_label: 'level'
+      - source_labels: ['__journal_syslog_identifier']
+        target_label: 'syslog_identifier'
+    pipeline_stages:
+      # Extract traceID from log lines for Loki→Tempo correlation
+      - regex:
+          expression: '(?:trace_id|traceId|traceID|TraceId|traceid)[=: ]+"?(?P<trace_id>\w{16,32})"?'
+      - labels:
+          trace_id:
+
+  # System log files
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: syslog
+          host: {{ ansible_hostname }}
+          __path__: /var/log/syslog
+      - targets:
+          - localhost
+        labels:
+          job: auth
+          host: {{ ansible_hostname }}
+          __path__: /var/log/auth.log
+      - targets:
+          - localhost
+        labels:
+          job: kern
+          host: {{ ansible_hostname }}
+          __path__: /var/log/kern.log
+
+{% if 'master' in group_names or 'worker' in group_names %}
+  # RKE2 logs
+  - job_name: rke2
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rke2
+          host: {{ ansible_hostname }}
+{% if 'master' in group_names %}
+          role: master
+{% else %}
+          role: worker
+{% endif %}
+          __path__: /var/log/rke2*.log
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<level>[IWEF])(?P<timestamp>\d{4} \d{2}:\d{2}:\d{2}\.\d+)'
+      - labels:
+          level:
+
+  # Kubernetes container logs (from containerd/CRI)
+  - job_name: kubernetes-pods
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: kubernetes-pods
+          host: {{ ansible_hostname }}
+{% if 'master' in group_names %}
+          role: master
+{% else %}
+          role: worker
+{% endif %}
+          __path__: /var/log/pods/**/*.log
+    pipeline_stages:
+      - cri: {}
+      # Extract traceID/spanID for Loki→Tempo correlation
+      - regex:
+          expression: '(?:trace_id|traceId|traceID|TraceId|traceid)[=: ]+"?(?P<trace_id>\w{16,32})"?'
+      - regex:
+          expression: '(?:span_id|spanId|spanID|SpanId)[=: ]+"?(?P<span_id>\w{16})"?'
+      - labels:
+          trace_id:
+          span_id:
+      - labeldrop:
+          - filename
+{% endif %}
+
+{% if 'monitoring' in group_names %}
+  # Prometheus logs
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: prometheus
+          host: {{ ansible_hostname }}
+          __path__: /var/log/prometheus*.log
+
+  # Grafana logs
+  - job_name: grafana
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: grafana
+          host: {{ ansible_hostname }}
+          __path__: /var/log/grafana/*.log
+{% endif %}

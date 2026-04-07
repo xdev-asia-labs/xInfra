@@ -1,0 +1,4 @@
+---
+# OpenTelemetry Collector default variables
+otel_collector_version: "0.91.0"
+tempo_url: "{{ hostvars[groups['monitoring'][0]].ansible_host }}"

@@ -1,0 +1,170 @@
+# Prometheus configuration file
+# {{ ansible_managed }}
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'rke2-cluster'
+    monitor: 'prometheus'
+
+# Remote write receiver & exemplar storage enabled via Prometheus flags:
+#   --web.enable-remote-write-receiver
+#   --enable-feature=exemplar-storage
+
+# Alertmanager configuration (optional - uncomment if needed)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - localhost:9093
+
+rule_files:
+  # - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus'
+          role: 'monitoring'
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['localhost:3000']
+        labels:
+          instance: 'grafana'
+          role: 'monitoring'
+
+  # Loki metrics
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['localhost:3100']
+        labels:
+          instance: 'loki'
+          role: 'monitoring'
+    metrics_path: /metrics
+
+  # Tempo metrics
+  - job_name: 'tempo'
+    static_configs:
+      - targets: ['localhost:3200']
+        labels:
+          instance: 'tempo'
+          role: 'monitoring'
+    metrics_path: /metrics
+
+  # OTel Collector on monitoring server
+  - job_name: 'otel_collector_monitoring'
+    static_configs:
+      - targets: ['localhost:8888']
+        labels:
+          instance: '{{ ansible_hostname }}'
+          role: 'monitoring'
+
+  # OTel Collector on Kubernetes nodes
+  - job_name: 'otel_collector_k8s'
+    static_configs:
+{% for host in groups['master'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:8888']
+        labels:
+          instance: '{{ host }}'
+          role: 'master'
+{% endfor %}
+{% for host in groups['worker'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:8888']
+        labels:
+          instance: '{{ host }}'
+          role: 'worker'
+{% endfor %}
+
+  # Node Exporter on monitoring server
+  - job_name: 'node_exporter_monitoring'
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          instance: '{{ ansible_hostname }}'
+          role: 'monitoring'
+          type: 'monitoring-server'
+
+  # Node Exporter on Kubernetes master nodes
+  - job_name: 'node_exporter_masters'
+    static_configs:
+{% for host in groups['master'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:9100']
+        labels:
+          instance: '{{ host }}'
+          role: 'master'
+          type: 'kubernetes-node'
+{% endfor %}
+
+  # Node Exporter on Kubernetes worker nodes
+  - job_name: 'node_exporter_workers'
+    static_configs:
+{% for host in groups['worker'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:9100']
+        labels:
+          instance: '{{ host }}'
+          role: 'worker'
+          type: 'kubernetes-node'
+{% endfor %}
+
+{% if groups['external_vms'] is defined and groups['external_vms'] | length > 0 %}
+  # Node Exporter on external VMs (non-Kubernetes)
+  - job_name: 'node_exporter_external'
+    static_configs:
+{% for host in groups['external_vms'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:9100']
+        labels:
+          instance: '{{ host }}'
+          role: '{{ hostvars[host].vm_role | default("external") }}'
+          type: 'external-vm'
+{% endfor %}
+{% endif %}
+
+  # Kubernetes API Server
+  - job_name: 'kubernetes-apiservers'
+    scheme: https
+    tls_config:
+      ca_file: /var/lib/rancher/rke2/server/tls/server-ca.crt
+      cert_file: /var/lib/rancher/rke2/server/tls/client-admin.crt
+      key_file: /var/lib/rancher/rke2/server/tls/client-admin.key
+      insecure_skip_verify: true
+    static_configs:
+{% for host in groups['master'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:6443']
+        labels:
+          instance: '{{ host }}'
+{% endfor %}
+
+  # Kubelet metrics (from all nodes)
+  - job_name: 'kubernetes-nodes'
+    scheme: https
+    tls_config:
+      ca_file: /var/lib/rancher/rke2/server/tls/server-ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/lib/rancher/rke2/server/node-token
+    static_configs:
+{% for host in groups['rke2_cluster'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:10250']
+        labels:
+          instance: '{{ host }}'
+{% endfor %}
+
+  # cAdvisor metrics (container metrics)
+  - job_name: 'kubernetes-cadvisor'
+    scheme: https
+    metrics_path: /metrics/cadvisor
+    tls_config:
+      ca_file: /var/lib/rancher/rke2/server/tls/server-ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/lib/rancher/rke2/server/node-token
+    static_configs:
+{% for host in groups['rke2_cluster'] %}
+      - targets: ['{{ hostvars[host].ansible_host }}:10250']
+        labels:
+          instance: '{{ host }}'
+{% endfor %}

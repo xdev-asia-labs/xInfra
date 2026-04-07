@@ -1,0 +1,121 @@
+---
+# Promtail installation tasks - log collector agent
+# Deployed on all nodes to ship logs to Loki
+
+- name: Create promtail user
+  ansible.builtin.user:
+    name: promtail
+    groups:
+      - adm
+      - systemd-journal
+    shell: /bin/false
+    system: true
+    create_home: false
+    append: true
+
+- name: Create Promtail directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: promtail
+    group: adm
+    mode: "0755"
+  loop:
+    - /etc/promtail
+    - /var/lib/promtail
+
+- name: Check current Promtail version
+  ansible.builtin.shell: /usr/local/bin/promtail --version 2>&1 | head -1 || echo 'not installed'
+  register: promtail_current_version
+  changed_when: false
+  failed_when: false
+
+- name: Set Promtail upgrade needed
+  ansible.builtin.set_fact:
+    promtail_needs_upgrade: "{{ promtail_version not in (promtail_current_version.stdout | default('')) }}"
+
+- name: Stop Promtail before upgrade
+  ansible.builtin.systemd:
+    name: promtail
+    state: stopped
+  when: promtail_needs_upgrade | bool
+  ignore_errors: true
+
+- name: Download Promtail {{ promtail_version }}
+  ansible.builtin.get_url:
+    url: "https://github.com/grafana/loki/releases/download/v{{ promtail_version }}/promtail-linux-amd64.zip"
+    dest: /tmp/promtail.zip
+    mode: "0644"
+  when: promtail_needs_upgrade | bool
+
+- name: Install unzip if not present
+  ansible.builtin.package:
+    name: unzip
+    state: present
+
+- name: Extract Promtail
+  ansible.builtin.unarchive:
+    src: /tmp/promtail.zip
+    dest: /tmp
+    remote_src: true
+  when: promtail_needs_upgrade | bool
+
+- name: Install Promtail binary
+  ansible.builtin.copy:
+    src: /tmp/promtail-linux-amd64
+    dest: /usr/local/bin/promtail
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when: promtail_needs_upgrade | bool
+  notify: restart promtail
+
+- name: Create Promtail configuration
+  ansible.builtin.template:
+    src: promtail-config.yml.j2
+    dest: /etc/promtail/promtail-config.yml
+    owner: promtail
+    group: adm
+    mode: "0644"
+  notify: restart promtail
+
+- name: Create Promtail systemd service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Promtail Log Collector
+      Documentation=https://grafana.com/docs/loki/latest/clients/promtail/
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=root
+      ExecStart=/usr/local/bin/promtail \
+        -config.file=/etc/promtail/promtail-config.yml
+
+      SyslogIdentifier=promtail
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/promtail.service
+    mode: "0644"
+  notify: restart promtail
+
+- name: Enable and start Promtail service
+  ansible.builtin.systemd:
+    name: promtail
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Cleanup Promtail installation files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/promtail.zip
+    - /tmp/promtail-linux-amd64

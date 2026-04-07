@@ -1,0 +1,147 @@
+---
+- name: Create RKE2 config directory
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: "0755"
+
+- name: Set first master flag
+  ansible.builtin.set_fact:
+    is_first_master: "{{ inventory_hostname == groups['master'][0] }}"
+
+- name: Configure container registry
+  ansible.builtin.include_tasks: registry.yml
+
+- name: Create RKE2 server config file for first master
+  ansible.builtin.template:
+    src: config-first-master.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: "0600"
+  when: is_first_master
+
+- name: Create RKE2 server config file for additional masters
+  ansible.builtin.template:
+    src: config-additional-master.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: "0600"
+  when: not is_first_master
+
+- name: Download RKE2 installation script
+  ansible.builtin.get_url:
+    url: https://get.rke2.io
+    dest: /tmp/rke2-install.sh
+    mode: "0755"
+
+- name: Install RKE2 server
+  ansible.builtin.shell: /tmp/rke2-install.sh
+  args:
+    creates: /usr/local/bin/rke2
+  environment:
+    INSTALL_RKE2_CHANNEL: "{{ rke2_channel }}"
+    INSTALL_RKE2_TYPE: "server"
+    INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+
+- name: Enable and start RKE2 server service on first master
+  ansible.builtin.systemd:
+    name: rke2-server
+    state: started
+    enabled: true
+  when: is_first_master
+
+- name: Wait for first master to be ready
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 9345
+    delay: 10
+    timeout: 300
+  when: is_first_master
+
+- name: Wait for kubectl to be available on first master
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/rke2/bin/kubectl
+    state: present
+    timeout: 300
+  when: is_first_master
+
+- name: Wait for node token to be created on first master
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/rke2/server/node-token
+    state: present
+    timeout: 300
+  when: is_first_master
+
+- name: Fetch node token from first master
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  register: node_token
+  when: is_first_master
+  delegate_to: "{{ groups['master'][0] }}"
+  run_once: true
+
+- name: Set node token fact
+  ansible.builtin.set_fact:
+    rke2_node_token: "{{ node_token.content | b64decode | trim }}"
+  when: is_first_master
+  delegate_to: "{{ groups['master'][0] }}"
+  run_once: true
+
+- name: Pause for first master initialization
+  ansible.builtin.pause:
+    seconds: 30
+  when: is_first_master
+
+- name: Enable and start RKE2 server service on additional masters
+  ansible.builtin.systemd:
+    name: rke2-server
+    state: started
+    enabled: true
+  when: not is_first_master
+
+- name: Wait for additional masters to be ready
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 9345
+    delay: 10
+    timeout: 300
+  when: not is_first_master
+
+- name: Create kubectl symlink
+  ansible.builtin.file:
+    src: /var/lib/rancher/rke2/bin/kubectl
+    dest: /usr/local/bin/kubectl
+    state: link
+
+- name: Create kubeconfig directory for root
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0755"
+
+- name: Copy kubeconfig for root user
+  ansible.builtin.copy:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: /root/.kube/config
+    remote_src: true
+    mode: "0600"
+
+- name: Update kubeconfig server address
+  ansible.builtin.replace:
+    path: /root/.kube/config
+    regexp: "127.0.0.1:6443"
+    replace: "{{ rke2_api_ip }}:6443"
+
+- name: Fetch kubeconfig from first master
+  ansible.builtin.fetch:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: /tmp/rke2-kubeconfig.yaml
+    flat: true
+  when: is_first_master
+
+- name: Wait for node to be ready
+  ansible.builtin.shell: |
+    /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  register: node_ready
+  until: node_ready.stdout == "True"
+  retries: 30
+  delay: 10
+  changed_when: false

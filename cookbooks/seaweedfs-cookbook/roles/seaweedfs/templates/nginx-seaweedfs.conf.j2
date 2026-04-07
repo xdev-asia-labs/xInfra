@@ -1,0 +1,88 @@
+upstream seaweedfs_master {
+    server 127.0.0.1:{{ master_port }};
+}
+
+upstream seaweedfs_volume {
+    server 127.0.0.1:{{ volume_port }};
+}
+
+upstream seaweedfs_filer {
+    server 127.0.0.1:{{ filer_port }};
+}
+
+upstream seaweedfs_s3 {
+    server 127.0.0.1:{{ s3_port }};
+}
+
+# Master UI
+server {
+    listen 80;
+    server_name master.{{ nginx_domain }};
+
+    location / {
+        proxy_pass http://seaweedfs_master;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Filer
+server {
+    listen 80;
+    server_name filer.{{ nginx_domain }};
+
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://seaweedfs_filer;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+# S3 API
+server {
+    listen 80;
+    server_name s3.{{ nginx_domain }};
+
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://seaweedfs_s3;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeout settings for large uploads
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+        proxy_read_timeout 300;
+        send_timeout 300;
+    }
+}
+
+# Volume Server (direct access, typically internal only)
+server {
+    listen 80;
+    server_name volume.{{ nginx_domain }};
+
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://seaweedfs_volume;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

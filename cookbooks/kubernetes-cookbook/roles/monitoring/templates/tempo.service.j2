@@ -1,0 +1,26 @@
+[Unit]
+Description=Grafana Tempo - Distributed Tracing Backend
+Documentation=https://grafana.com/docs/tempo/latest/
+Wants=network-online.target
+After=network-online.target prometheus.service
+
+[Service]
+Type=simple
+User=tempo
+Group=monitoring
+ExecStart=/usr/local/bin/tempo \
+  -config.file=/etc/tempo/tempo-config.yml
+
+SyslogIdentifier=tempo
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Security hardening
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

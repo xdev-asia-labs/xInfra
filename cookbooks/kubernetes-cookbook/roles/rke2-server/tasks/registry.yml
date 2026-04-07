@@ -1,0 +1,8 @@
+---
+- name: Create registries.yaml configuration
+  ansible.builtin.template:
+    src: registries.yaml.j2
+    dest: /etc/rancher/rke2/registries.yaml
+    mode: "0600"
+  when:
+    - (registries is defined and registries | length > 0) or (registry_mirrors is defined and registry_mirrors | length > 0) or (insecure_registries is defined and insecure_registries | length > 0)

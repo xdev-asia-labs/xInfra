@@ -1,0 +1,89 @@
+---
+# Grafana installation tasks
+
+- name: Check if Grafana is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/grafana
+  register: grafana_binary
+
+- name: Download Grafana
+  ansible.builtin.get_url:
+    url: "https://dl.grafana.com/oss/release/grafana-{{ grafana_version }}.linux-amd64.tar.gz"
+    dest: /tmp/grafana.tar.gz
+    mode: "0644"
+  when: not grafana_binary.stat.exists
+
+- name: Extract Grafana
+  ansible.builtin.unarchive:
+    src: /tmp/grafana.tar.gz
+    dest: /tmp
+    remote_src: true
+  when: not grafana_binary.stat.exists
+
+- name: Copy Grafana binaries
+  ansible.builtin.copy:
+    src: "/tmp/grafana-v{{ grafana_version }}/bin/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: grafana
+    group: monitoring
+    mode: "0755"
+    remote_src: true
+  loop:
+    - grafana
+    - grafana-server
+    - grafana-cli
+  when: not grafana_binary.stat.exists
+
+- name: Copy Grafana files
+  ansible.builtin.copy:
+    src: "/tmp/grafana-v{{ grafana_version }}/{{ item }}"
+    dest: "/var/lib/grafana/{{ item }}"
+    owner: grafana
+    group: monitoring
+    mode: "0755"
+    remote_src: true
+  loop:
+    - public
+    - conf
+    - plugins-bundled
+  when: not grafana_binary.stat.exists
+
+- name: Create Grafana configuration
+  ansible.builtin.template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Create Grafana systemd service
+  ansible.builtin.template:
+    src: grafana.service.j2
+    dest: /etc/systemd/system/grafana-server.service
+    mode: "0644"
+  notify: restart grafana
+
+- name: Enable and start Grafana service
+  ansible.builtin.systemd:
+    name: grafana-server
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for Grafana to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:3000/api/health"
+    status_code: 200
+  register: result
+  until: result.status == 200
+  retries: 12
+  delay: 5
+
+- name: Cleanup Grafana installation files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/grafana.tar.gz
+    - "/tmp/grafana-v{{ grafana_version }}"

@@ -1,0 +1,167 @@
+{
+  "id": null,
+  "uid": "service-map",
+  "title": "Service Map - Application Topology",
+  "description": "Service topology with node graph, request flow and errors between services",
+  "tags": ["tracing", "tempo", "service-map"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0
+      },
+      {
+        "name": "tempo_datasource",
+        "type": "datasource",
+        "query": "tempo",
+        "current": { "text": "Tempo", "value": "Tempo" },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Service Map (Node Graph)",
+      "type": "nodeGraph",
+      "datasource": { "uid": "tempo" },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 0 },
+      "targets": [{
+        "queryType": "serviceMap"
+      }]
+    },
+    {
+      "title": "Service Health Summary",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "collapsed": false
+    },
+    {
+      "title": "Top Services by Request Rate",
+      "type": "bargauge",
+      "datasource": { "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }] }
+        }
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [{
+        "expr": "topk(10, sum by (service) (rate(traces_spanmetrics_calls_total[5m])))",
+        "legendFormat": "{% raw %}{{service}}{% endraw %}"
+      }]
+    },
+    {
+      "title": "Top Services by Error Rate",
+      "type": "bargauge",
+      "datasource": { "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 0.1, "color": "yellow" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [{
+        "expr": "topk(10, sum by (service) (rate(traces_spanmetrics_calls_total{status_code=\"STATUS_CODE_ERROR\"}[5m])))",
+        "legendFormat": "{% raw %}{{service}}{% endraw %}"
+      }]
+    },
+    {
+      "title": "Top Services by P95 Latency",
+      "type": "bargauge",
+      "datasource": { "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 0.5, "color": "yellow" }, { "value": 2, "color": "red" }] }
+        }
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [{
+        "expr": "topk(10, histogram_quantile(0.95, sum by (le, service) (rate(traces_spanmetrics_latency_bucket[5m]))))",
+        "legendFormat": "{% raw %}{{service}}{% endraw %}"
+      }]
+    },
+    {
+      "title": "Service Dependencies Detail",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false
+    },
+    {
+      "title": "Client -> Server Request Rate",
+      "type": "table",
+      "datasource": { "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "client" }, "properties": [{ "id": "custom.width", "value": 200 }] },
+          { "matcher": { "id": "byName", "options": "server" }, "properties": [{ "id": "custom.width", "value": 200 }] }
+        ]
+      },
+      "options": { "showHeader": true, "sortBy": [{ "desc": true, "displayName": "Value" }] },
+      "targets": [{
+        "expr": "sum by (client, server) (rate(traces_service_graph_request_total[5m])) > 0",
+        "format": "table",
+        "instant": true
+      }]
+    },
+    {
+      "title": "Client -> Server Error Rate",
+      "type": "table",
+      "datasource": { "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "client" }, "properties": [{ "id": "custom.width", "value": 200 }] },
+          { "matcher": { "id": "byName", "options": "server" }, "properties": [{ "id": "custom.width", "value": 200 }] },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 0.01, "color": "red" }] } },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "sortBy": [{ "desc": true, "displayName": "Value" }] },
+      "targets": [{
+        "expr": "sum by (client, server) (rate(traces_service_graph_request_failed_total[5m])) > 0",
+        "format": "table",
+        "instant": true
+      }]
+    },
+    {
+      "title": "Recent Traces",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "collapsed": false
+    },
+    {
+      "title": "Search Traces",
+      "type": "traces",
+      "datasource": { "uid": "tempo" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 37 },
+      "targets": [{
+        "queryType": "nativeSearch",
+        "limit": 20
+      }]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

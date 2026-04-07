@@ -1,0 +1,6 @@
+---
+- name: Deploy SeaweedFS on Single Node
+  hosts: seaweedfs_single
+  become: yes
+  roles:
+    - seaweedfs

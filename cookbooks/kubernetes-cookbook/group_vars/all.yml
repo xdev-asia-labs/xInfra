@@ -1,0 +1,26 @@
+---
+# RKE2 Configuration Variables
+# Edit .env file for configuration
+
+# RKE2 Version
+rke2_version: "{{ lookup('env', 'RKE2_VERSION') | default('', true) }}"
+rke2_channel: "{{ lookup('env', 'RKE2_CHANNEL') | default('stable', true) }}"
+
+# API Server
+rke2_api_ip: "{{ lookup('env', 'RKE2_API_IP') }}"
+rke2_api_port: "{{ lookup('env', 'RKE2_API_PORT') | default('9345', true) }}"
+rke2_token: "{{ lookup('env', 'RKE2_TOKEN') }}"
+
+# Network
+rke2_cni: "{{ lookup('env', 'RKE2_CNI') | default('canal', true) }}"
+rke2_cluster_cidr: "{{ lookup('env', 'RKE2_CLUSTER_CIDR') | default('10.42.0.0/16', true) }}"
+rke2_service_cidr: "{{ lookup('env', 'RKE2_SERVICE_CIDR') | default('10.43.0.0/16', true) }}"
+rke2_cluster_dns: "{{ lookup('env', 'RKE2_CLUSTER_DNS') | default('10.43.0.10', true) }}"
+rke2_cluster_domain: "{{ lookup('env', 'RKE2_CLUSTER_DOMAIN') | default('cluster.local', true) }}"
+
+# System
+rke2_download_method: "{{ lookup('env', 'RKE2_DOWNLOAD_METHOD') | default('curl', true) }}"
+rke2_selinux: "{{ lookup('env', 'RKE2_SELINUX') | default('false', true) | bool }}"
+disable_firewall: "{{ lookup('env', 'DISABLE_FIREWALL') | default('true', true) | bool }}"
+configure_sysctl: "{{ lookup('env', 'CONFIGURE_SYSCTL') | default('true', true) | bool }}"
+configure_kernel_modules: "{{ lookup('env', 'CONFIGURE_KERNEL_MODULES') | default('true', true) | bool }}"

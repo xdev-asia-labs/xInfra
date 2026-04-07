@@ -1,0 +1,116 @@
+---
+- name: Disable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: stopped
+    enabled: false
+  when:
+    - disable_firewall | default(true)
+    - ansible_os_family == 'RedHat'
+  ignore_errors: true
+
+- name: Disable UFW firewall
+  ansible.builtin.systemd:
+    name: ufw
+    state: stopped
+    enabled: false
+  when:
+    - disable_firewall | default(true)
+    - ansible_os_family == 'Debian'
+  ignore_errors: true
+
+- name: Disable SELinux
+  ansible.posix.selinux:
+    state: disabled
+  when:
+    - not rke2_selinux | default(false)
+    - ansible_os_family == 'RedHat'
+  ignore_errors: true
+
+- name: Set SELinux to permissive mode until reboot
+  ansible.builtin.command: setenforce 0
+  when:
+    - not rke2_selinux | default(false)
+    - ansible_os_family == 'RedHat'
+  failed_when: false
+  changed_when: false
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop:
+    - br_netfilter
+    - overlay
+  when: configure_kernel_modules | default(true)
+
+- name: Configure sysctl parameters
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-rke2.conf
+  loop:
+    - { name: "net.bridge.bridge-nf-call-iptables", value: "1" }
+    - { name: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { name: "net.ipv4.ip_forward", value: "1" }
+    - { name: "net.ipv6.conf.all.forwarding", value: "1" }
+    - { name: "vm.swappiness", value: "0" }
+  when: configure_sysctl | default(true)
+
+- name: Disable swap
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+  when: ansible_swaptotal_mb > 0
+
+- name: Remove swap from /etc/fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^\s*[^#].*\s+swap\s+'
+    state: absent
+
+- name: Install required packages (RedHat/CentOS)
+  ansible.builtin.yum:
+    name:
+      - curl
+      - wget
+      - tar
+      - policycoreutils-python-utils
+      - container-selinux
+      - iptables
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Install required packages (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - tar
+      - iptables
+      - policycoreutils
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure /usr/local/bin exists
+  ansible.builtin.file:
+    path: /usr/local/bin
+    state: directory
+    mode: "0755"
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Update /etc/hosts with cluster nodes
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    block: |
+      {% for host in groups['rke2_cluster'] %}
+      {{ hostvars[host]['ansible_host'] }} {{ host }}
+      {% endfor %}
+    marker: "# {mark} RKE2 CLUSTER HOSTS"
+    create: true

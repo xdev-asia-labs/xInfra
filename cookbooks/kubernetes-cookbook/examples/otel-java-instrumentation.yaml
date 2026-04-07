@@ -1,0 +1,333 @@
+---
+# Example: Java Spring Boot application with OpenTelemetry auto-instrumentation
+# This example shows how to instrument a Java application to send traces to Tempo
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-prod-service
+  namespace: btxh-prod
+  labels:
+    app: identity-prod-service
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: identity-prod-service
+  template:
+    metadata:
+      labels:
+        app: identity-prod-service
+        version: v1
+    spec:
+      # Init container to download OpenTelemetry Java agent
+      initContainers:
+        - name: download-otel-agent
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Downloading OpenTelemetry Java agent..."
+              wget -q -O /otel/opentelemetry-javaagent.jar \
+                https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.11.0/opentelemetry-javaagent.jar
+              echo "Downloaded successfully"
+              ls -lh /otel/opentelemetry-javaagent.jar
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /otel
+      
+      containers:
+        - name: identity-service
+          image: your-registry/identity-service:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          
+          env:
+            # ========================================
+            # OpenTelemetry Configuration (REQUIRED)
+            # ========================================
+            
+            # Service name - appears in traces and service graph
+            - name: OTEL_SERVICE_NAME
+              value: "identity-service"
+            
+            # OTel Collector endpoint (gRPC)
+            # localhost:4317 works because OTel collector is on same node (DaemonSet)
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://localhost:4317"
+            
+            # Protocol: grpc or http/protobuf
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            
+            # Enable trace export via OTLP
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            
+            # Disable metrics export (use Prometheus /metrics endpoint instead)
+            - name: OTEL_METRICS_EXPORTER
+              value: "none"
+            
+            # Disable logs export (use Promtail/Loki instead)
+            - name: OTEL_LOGS_EXPORTER
+              value: "none"
+            
+            # ========================================
+            # Sampling Configuration
+            # ========================================
+            
+            # Sampling strategy: always_on, always_off, traceidratio, parentbased_*
+            - name: OTEL_TRACES_SAMPLER
+              value: "parentbased_traceidratio"
+            
+            # Sampling ratio: 1.0 = 100%, 0.1 = 10%, 0.01 = 1%
+            # Use 100% for dev/test, 10-25% for production
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "1.0"
+            
+            # ========================================
+            # Resource Attributes (for context)
+            # ========================================
+            
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=production,service.version=1.0.0,k8s.namespace.name=$(NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.node.name=$(NODE_NAME),k8s.cluster.name=rke2"
+            
+            # ========================================
+            # Java Agent Configuration
+            # ========================================
+            
+            # Attach OTel Java agent to JVM
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/opt/otel/opentelemetry-javaagent.jar"
+            
+            # Optional: Disable specific instrumentations if needed
+            # - name: OTEL_INSTRUMENTATION_JDBC_ENABLED
+            #   value: "true"
+            # - name: OTEL_INSTRUMENTATION_SPRING_WEBMVC_ENABLED
+            #   value: "true"
+            
+            # ========================================
+            # Kubernetes metadata (auto-injected)
+            # ========================================
+            
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            
+            # ========================================
+            # Application-specific environment variables
+            # ========================================
+            
+            - name: SPRING_PROFILES_ACTIVE
+              value: "production"
+            
+            - name: SERVER_PORT
+              value: "8080"
+            
+            # Example: Database connection
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://postgres:5432/identity"
+            
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+          
+          # Mount OTel agent JAR
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /opt/otel
+              readOnly: true
+          
+          # ========================================
+          # Health checks
+          # ========================================
+          
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+          
+          # ========================================
+          # Resources
+          # ========================================
+          
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      
+      # ========================================
+      # Volumes
+      # ========================================
+      
+      volumes:
+        # EmptyDir volume to store OTel agent JAR
+        - name: otel-agent
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-prod-service
+  namespace: btxh-prod
+  labels:
+    app: identity-prod-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: identity-prod-service
+
+---
+# Optional: ConfigMap for advanced OTel configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-config
+  namespace: btxh-prod
+data:
+  # Additional OTel configuration can be provided via config file
+  # and passed via OTEL_JAVAAGENT_CONFIGURATION_FILE env var
+  otel-config.properties: |
+    # Span processor configuration
+    otel.bsp.schedule.delay=5000
+    otel.bsp.max.queue.size=2048
+    otel.bsp.max.export.batch.size=512
+    
+    # Span limits
+    otel.span.attribute.count.limit=128
+    otel.span.event.count.limit=128
+    otel.span.link.count.limit=128
+    
+    # Instrumentation-specific configuration
+    otel.instrumentation.jdbc.statement-sanitizer.enabled=true
+    otel.instrumentation.common.db-statement-sanitizer.enabled=true
+    
+    # HTTP client/server configuration
+    otel.instrumentation.http.client.capture-request-headers=content-type,user-agent
+    otel.instrumentation.http.server.capture-request-headers=content-type,authorization
+    
+    # Suppress noisy instrumentations (optional)
+    # otel.instrumentation.actuator.enabled=false
+    # otel.instrumentation.spring-web.enabled=true
+
+---
+# Example: HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: identity-prod-service-hpa
+  namespace: btxh-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: identity-prod-service
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# Example: NetworkPolicy (optional - for security)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: identity-prod-service-netpol
+  namespace: btxh-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: identity-prod-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow OTel Collector (localhost - same pod)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    # Allow external services (DB, Redis, etc.)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 6379  # Redis

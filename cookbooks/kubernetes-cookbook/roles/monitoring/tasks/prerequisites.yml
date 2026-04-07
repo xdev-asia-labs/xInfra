@@ -1,0 +1,64 @@
+---
+# Prerequisites for monitoring stack
+
+- name: Install required packages
+  ansible.builtin.package:
+    name:
+      - wget
+      - curl
+      - tar
+      - unzip
+    state: present
+
+- name: Create monitoring group
+  ansible.builtin.group:
+    name: monitoring
+    state: present
+    system: true
+
+- name: Create prometheus user
+  ansible.builtin.user:
+    name: prometheus
+    group: monitoring
+    shell: /bin/false
+    system: true
+    create_home: false
+
+- name: Create grafana user
+  ansible.builtin.user:
+    name: grafana
+    group: monitoring
+    shell: /bin/false
+    system: true
+    create_home: false
+
+- name: Create node_exporter user
+  ansible.builtin.user:
+    name: node_exporter
+    group: monitoring
+    shell: /bin/false
+    system: true
+    create_home: false
+
+- name: Create directories for Prometheus
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: prometheus
+    group: monitoring
+    mode: "0755"
+  loop:
+    - /etc/prometheus
+    - /var/lib/prometheus
+
+- name: Create directories for Grafana
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: grafana
+    group: monitoring
+    mode: "0755"
+  loop:
+    - /etc/grafana
+    - /var/lib/grafana
+    - /var/log/grafana

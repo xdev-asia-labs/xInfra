@@ -1,0 +1,23 @@
+[Unit]
+Description=SeaweedFS Filer
+After=network.target seaweedfs-master.service
+Requires=seaweedfs-master.service
+
+[Service]
+Type=simple
+User=seaweedfs
+Group=seaweedfs
+ExecStart={{ seaweedfs_install_dir }}/weed filer \
+  -ip=0.0.0.0 \
+  -port={{ filer_port }} \
+  -master={{ filer_master }} \
+  -defaultStoreDir={{ seaweedfs_data_dir }}/filer \
+  -defaultReplicaPlacement=000 \
+  -encryptVolumeData=false
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:{{ seaweedfs_log_dir }}/filer.log
+StandardError=append:{{ seaweedfs_log_dir }}/filer.error.log
+
+[Install]
+WantedBy=multi-user.target

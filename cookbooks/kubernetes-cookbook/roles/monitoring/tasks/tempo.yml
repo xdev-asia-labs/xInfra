@@ -1,0 +1,115 @@
+---
+# Grafana Tempo installation tasks - distributed tracing backend
+
+- name: Create tempo user
+  ansible.builtin.user:
+    name: tempo
+    group: monitoring
+    shell: /bin/false
+    system: true
+    create_home: false
+
+- name: Create Tempo directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: tempo
+    group: monitoring
+    mode: "0755"
+  loop:
+    - /etc/tempo
+    - /var/lib/tempo
+    - /var/lib/tempo/blocks
+    - /var/lib/tempo/wal
+    - /var/lib/tempo/generator
+    - /var/lib/tempo/generator/wal
+    - /var/lib/tempo/generator/traces
+
+- name: Check current Tempo version
+  ansible.builtin.shell: /usr/local/bin/tempo --version 2>&1 | head -1 || echo 'not installed'
+  register: tempo_current_version
+  changed_when: false
+  failed_when: false
+
+- name: Set Tempo upgrade needed
+  ansible.builtin.set_fact:
+    tempo_needs_upgrade: "{{ tempo_version not in (tempo_current_version.stdout | default('')) }}"
+
+- name: Stop Tempo before upgrade
+  ansible.builtin.systemd:
+    name: tempo
+    state: stopped
+  when: tempo_needs_upgrade | bool
+  ignore_errors: true
+
+- name: Download Tempo {{ tempo_version }}
+  ansible.builtin.get_url:
+    url: "https://github.com/grafana/tempo/releases/download/v{{ tempo_version }}/tempo_{{ tempo_version }}_linux_amd64.tar.gz"
+    dest: /tmp/tempo.tar.gz
+    mode: "0644"
+  when: tempo_needs_upgrade | bool
+
+- name: Create temp directory for Tempo extraction
+  ansible.builtin.file:
+    path: /tmp/tempo-extract
+    state: directory
+    mode: "0755"
+  when: tempo_needs_upgrade | bool
+
+- name: Extract Tempo
+  ansible.builtin.unarchive:
+    src: /tmp/tempo.tar.gz
+    dest: /tmp/tempo-extract
+    remote_src: true
+  when: tempo_needs_upgrade | bool
+
+- name: Install Tempo binary
+  ansible.builtin.copy:
+    src: /tmp/tempo-extract/tempo
+    dest: /usr/local/bin/tempo
+    owner: tempo
+    group: monitoring
+    mode: "0755"
+    remote_src: true
+  when: tempo_needs_upgrade | bool
+  notify: restart tempo
+
+- name: Create Tempo configuration
+  ansible.builtin.template:
+    src: tempo-config.yml.j2
+    dest: /etc/tempo/tempo-config.yml
+    owner: tempo
+    group: monitoring
+    mode: "0644"
+  notify: restart tempo
+
+- name: Create Tempo systemd service
+  ansible.builtin.template:
+    src: tempo.service.j2
+    dest: /etc/systemd/system/tempo.service
+    mode: "0644"
+  notify: restart tempo
+
+- name: Enable and start Tempo service
+  ansible.builtin.systemd:
+    name: tempo
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for Tempo to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:3200/ready"
+    status_code: 200
+  register: result
+  until: result.status == 200
+  retries: 15
+  delay: 5
+
+- name: Cleanup Tempo installation files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tempo.tar.gz
+    - /tmp/tempo-extract

@@ -1,0 +1,16 @@
+# RKE2 Agent Configuration
+server: https://{{ rke2_api_ip }}:9345
+token: "{{ rke2_node_token }}"
+
+# Kubelet args
+{% if rke2_kubelet_args is defined and rke2_kubelet_args | length > 0 %}
+kubelet-arg:
+{% for arg in rke2_kubelet_args %}
+  - "{{ arg }}"
+{% endfor %}
+{% endif %}
+
+# SELinux
+{% if rke2_selinux | default(false) %}
+selinux: true
+{% endif %}

@@ -1,0 +1,20 @@
+# /etc/netplan/01-bridge-config.yaml - {{ inventory_hostname }}
+network:
+  version: 2
+  renderer: networkd
+  
+  ethernets:
+    {{ network_interface }}:
+      dhcp4: false
+      dhcp6: false
+  
+  bridges:
+    {{ bridge_name }}:
+      interfaces:
+        - {{ network_interface }}
+      dhcp4: true
+      dhcp6: false
+      mtu: {{ bridge_mtu }}
+      parameters:
+        stp: {{ bridge_stp | lower }}
+        forward-delay: {{ bridge_forward_delay }}

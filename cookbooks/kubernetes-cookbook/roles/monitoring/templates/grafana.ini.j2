@@ -1,0 +1,54 @@
+# Grafana configuration file
+# {{ ansible_managed }}
+
+[paths]
+data = /var/lib/grafana
+logs = /var/log/grafana
+plugins = /var/lib/grafana/plugins-bundled
+provisioning = /etc/grafana/provisioning
+
+[server]
+protocol = http
+http_addr = 0.0.0.0
+http_port = 3000
+domain = {{ ansible_host }}
+root_url = http://{{ ansible_host }}:3000
+
+[database]
+type = sqlite3
+path = /var/lib/grafana/grafana.db
+
+[security]
+admin_user = admin
+admin_password = admin
+secret_key = {{ grafana_secret_key | default('SW2YcwTI82maPgjNMDnB0QM99kiewSP9') }}
+
+[users]
+allow_sign_up = false
+allow_org_create = false
+auto_assign_org = true
+auto_assign_org_role = Viewer
+
+[auth.anonymous]
+enabled = false
+
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+
+[log]
+mode = console file
+level = info
+
+[log.console]
+level = info
+format = console
+
+[log.file]
+level = info
+format = json
+log_rotate = true
+max_lines = 1000000
+max_size_shift = 28
+daily_rotate = true
+max_days = 7

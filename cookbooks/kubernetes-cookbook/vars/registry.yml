@@ -1,0 +1,24 @@
+---
+# Container Registry Configuration
+# This file is loaded by playbooks and processes environment variables
+
+# Parse REGISTRIES_JSON
+registries: "{{ lookup('env', 'REGISTRIES_JSON') | default('[]', true) | from_json }}"
+
+# Parse REGISTRY_MIRRORS
+registry_mirrors: "{{ lookup('env', 'REGISTRY_MIRRORS').split(',') if lookup('env', 'REGISTRY_MIRRORS') else [] }}"
+
+# Parse INSECURE_REGISTRIES  
+insecure_registries: "{{ lookup('env', 'INSECURE_REGISTRIES').split(',') if lookup('env', 'INSECURE_REGISTRIES') else [] }}"
+
+# Parse TLS SAN
+rke2_tls_san: "{{ ['{{ rke2_api_ip }}'] + lookup('env', 'RKE2_TLS_SAN_EXTRA').split(',') if lookup('env', 'RKE2_TLS_SAN_EXTRA') else ['{{ rke2_api_ip }}'] }}"
+
+# Parse RKE2_DISABLE
+rke2_disable: "{{ lookup('env', 'RKE2_DISABLE').split(',') if lookup('env', 'RKE2_DISABLE') else [] }}"
+
+# Parse RKE2_SERVER_NODE_TAINTS
+rke2_server_node_taints: "{{ lookup('env', 'RKE2_SERVER_NODE_TAINTS').split(',') if lookup('env', 'RKE2_SERVER_NODE_TAINTS') else [] }}"
+
+# Parse RKE2_KUBELET_ARGS
+rke2_kubelet_args: "{{ lookup('env', 'RKE2_KUBELET_ARGS').split(',') if lookup('env', 'RKE2_KUBELET_ARGS') else [] }}"

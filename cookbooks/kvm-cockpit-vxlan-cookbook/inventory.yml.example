@@ -1,0 +1,28 @@
+all:
+  children:
+    kvm_hosts:
+      hosts:
+        kvm-node01:
+          ansible_host: 192.168.1.10  # CHANGE THIS
+          host_ip: 192.168.1.10       # CHANGE THIS
+          vxlan_remote_ip: 192.168.1.11  # CHANGE THIS
+          vm_ip_range_start: 100
+          vm_ip_range_end: 149
+          dhcp_range_start: "10.10.10.100"
+          dhcp_range_end: "10.10.10.149"
+        
+        kvm-node02:
+          ansible_host: 192.168.1.11  # CHANGE THIS
+          host_ip: 192.168.1.11       # CHANGE THIS
+          vxlan_remote_ip: 192.168.1.10  # CHANGE THIS
+          vm_ip_range_start: 150
+          vm_ip_range_end: 199
+          dhcp_range_start: "10.10.10.150"
+          dhcp_range_end: "10.10.10.200"
+      
+      vars:
+        ansible_user: ubuntu  # CHANGE THIS
+        ansible_become: yes
+        ansible_python_interpreter: /usr/bin/python3
+        # Uncomment and set if using SSH key
+        # ansible_ssh_private_key_file: ~/.ssh/id_rsa

@@ -1,0 +1,59 @@
+---
+# ================================
+# NON-SENSITIVE CONFIGURATION
+# ================================
+# This file contains only non-sensitive default values
+# Sensitive values should be in .env or ansible vault
+
+# KVM Packages
+kvm_packages:
+  - qemu-kvm
+  - libvirt-daemon-system
+  - libvirt-clients
+  - bridge-utils
+  - virtinst
+  - virt-manager
+  - libguestfs-tools
+  - libosinfo-bin
+  - cloud-image-utils
+  - cpu-checker
+
+# Cockpit Packages
+cockpit_packages:
+  - cockpit
+  - cockpit-machines
+
+# Default Bridge Configuration (can be overridden)
+bridge_name: "{{ lookup('env', 'BRIDGE_NAME') | default('br0', true) }}"
+bridge_mtu: "{{ lookup('env', 'BRIDGE_MTU') | default(1500, true) | int }}"
+bridge_stp: "{{ lookup('env', 'BRIDGE_STP') | default('true', true) | bool }}"
+bridge_forward_delay: "{{ lookup('env', 'BRIDGE_FORWARD_DELAY') | default(4, true) | int }}"
+
+# Virtual Network Configuration
+vm_private_network_name: "{{ lookup('env', 'VM_PRIVATE_NETWORK_NAME') | default('vm-private', true) }}"
+vm_private_subnet: "{{ lookup('env', 'VM_PRIVATE_SUBNET') | default('10.10.10.0/24', true) }}"
+vm_private_gateway: "{{ lookup('env', 'VM_PRIVATE_GATEWAY') | default('10.10.10.1', true) }}"
+vm_private_bridge: "{{ lookup('env', 'VM_PRIVATE_BRIDGE') | default('virbr1', true) }}"
+
+# VXLAN Configuration
+vxlan_interface: "{{ lookup('env', 'VXLAN_INTERFACE') | default('vxlan100', true) }}"
+vxlan_vni: "{{ lookup('env', 'VXLAN_VNI') | default(100, true) | int }}"
+vxlan_port: "{{ lookup('env', 'VXLAN_PORT') | default(4789, true) | int }}"
+vxlan_bridge: "{{ lookup('env', 'VXLAN_BRIDGE') | default('vxlan-br0', true) }}"
+vxlan_mtu: "{{ lookup('env', 'VXLAN_MTU') | default(1450, true) | int }}"
+vxlan_network_name: "{{ lookup('env', 'VXLAN_NETWORK_NAME') | default('vxlan-net', true) }}"
+
+# Storage Configuration
+storage_pool_name: "{{ lookup('env', 'STORAGE_POOL_NAME') | default('default', true) }}"
+storage_pool_path: "{{ lookup('env', 'STORAGE_POOL_PATH') | default('/var/lib/libvirt/images', true) }}"
+
+# Cockpit Configuration
+cockpit_port: "{{ lookup('env', 'COCKPIT_PORT') | default(9090, true) | int }}"
+enable_firewall: "{{ lookup('env', 'ENABLE_FIREWALL') | default('false', true) | bool }}"
+
+# Nested Virtualization
+enable_nested_virt: "{{ lookup('env', 'ENABLE_NESTED_VIRT') | default('false', true) | bool }}"
+
+# Libvirt Users
+libvirt_users:
+  - "{{ ansible_user }}"

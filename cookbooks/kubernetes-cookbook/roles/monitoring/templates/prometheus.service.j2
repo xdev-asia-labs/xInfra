@@ -1,0 +1,31 @@
+[Unit]
+Description=Prometheus
+Documentation=https://prometheus.io/docs/introduction/overview/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=monitoring
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --storage.tsdb.retention.time={{ prometheus_retention_days | default('90d') }} \
+{% if prometheus_retention_size is defined %}
+  --storage.tsdb.retention.size={{ prometheus_retention_size }} \
+{% endif %}
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --web.listen-address=0.0.0.0:9090 \
+  --web.enable-lifecycle \
+  --web.enable-remote-write-receiver \
+  --enable-feature=exemplar-storage
+
+SyslogIdentifier=prometheus
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

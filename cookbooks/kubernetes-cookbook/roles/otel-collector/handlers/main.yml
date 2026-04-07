@@ -1,0 +1,7 @@
+---
+# OTel Collector handlers
+- name: restart otel-collector
+  ansible.builtin.systemd:
+    name: otel-collector
+    state: restarted
+    daemon_reload: true

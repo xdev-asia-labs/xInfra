@@ -1,0 +1,28 @@
+.DS_Store
+*.retry
+*.log
+/tmp/
+ansible_fact_cache/
+.vault_pass
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Environment files - NEVER commit these
+.env
+*.env
+!.env.example
+
+# Ansible sensitive files
+inventory.yml
+!inventory.yml.example
+group_vars/all.yml
+!group_vars/all.yml.example
+host_vars/*.yml
+!host_vars/*.yml.example
+
+# Vault files (if not using .vault_pass)
+vault_*.yml
+secrets.yml

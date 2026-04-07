@@ -1,0 +1,50 @@
+---
+# RKE2 HA Cluster Inventory (YAML format)
+# Cập nhật IP addresses, hostnames, và SSH credentials cho phù hợp với môi trường của bạn
+
+all:
+  children:
+    master:
+      hosts:
+        master-01:
+          ansible_host: 192.168.1.101
+          ansible_user: root
+          # Uncomment một trong các options dưới đây:
+          # Option 1: SSH key (khuyến nghị)
+          ansible_ssh_private_key_file: ~/.ssh/id_rsa
+          # Option 2: Password
+          # ansible_ssh_pass: your_password
+          # Option 3: Sudo password (nếu user không phải root)
+          # ansible_become_pass: your_sudo_password
+
+        master-02:
+          ansible_host: 192.168.1.102
+          ansible_user: root
+          ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+        master-03:
+          ansible_host: 192.168.1.103
+          ansible_user: root
+          ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+    worker:
+      hosts:
+        worker-01:
+          ansible_host: 192.168.1.111
+          ansible_user: root
+          ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+        worker-02:
+          ansible_host: 192.168.1.112
+          ansible_user: root
+          ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+    rke2_cluster:
+      children:
+        master:
+        worker:
+      vars:
+        # Biến chung cho toàn bộ cluster
+        ansible_python_interpreter: /usr/bin/python3
+        # SSH options
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"

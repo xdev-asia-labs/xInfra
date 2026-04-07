@@ -1,0 +1,186 @@
+---
+# Monitoring Stack Deployment Playbook
+# Deploys Prometheus, Grafana, and Node Exporter on monitoring server
+# Also deploys Node Exporter on all Kubernetes nodes
+
+- name: Deploy monitoring stack on monitoring server
+  hosts: monitoring
+  become: true
+  gather_facts: true
+  roles:
+    - monitoring
+
+- name: Deploy Node Exporter on Kubernetes nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - node-exporter
+
+- name: Deploy Node Exporter on external VMs (optional)
+  hosts: "{{ groups['external_vms'] | default([]) }}"
+  become: true
+  gather_facts: true
+  roles:
+    - node-exporter
+
+- name: Copy Kubernetes certificates to monitoring server
+  hosts: master[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create temporary directory for certificates
+      ansible.builtin.file:
+        path: /tmp/k8s-certs
+        state: directory
+        mode: "0755"
+
+    - name: Copy RKE2 certificates
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/tmp/k8s-certs/{{ item | basename }}"
+        remote_src: true
+        mode: "0644"
+      loop:
+        - /var/lib/rancher/rke2/server/tls/server-ca.crt
+        - /var/lib/rancher/rke2/server/tls/client-admin.crt
+        - /var/lib/rancher/rke2/server/tls/client-admin.key
+
+    - name: Fetch certificates to local
+      ansible.builtin.fetch:
+        src: "/tmp/k8s-certs/{{ item }}"
+        dest: "/tmp/k8s-monitoring-certs/{{ item }}"
+        flat: true
+      loop:
+        - server-ca.crt
+        - client-admin.crt
+        - client-admin.key
+
+- name: Upload certificates to monitoring server
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create RKE2 directory on monitoring server
+      ansible.builtin.file:
+        path: /var/lib/rancher/rke2/server/tls
+        state: directory
+        owner: prometheus
+        group: monitoring
+        mode: "0755"
+        recurse: true
+
+    - name: Copy certificates to monitoring server
+      ansible.builtin.copy:
+        src: "/tmp/k8s-monitoring-certs/{{ item }}"
+        dest: "/var/lib/rancher/rke2/server/tls/{{ item }}"
+        owner: prometheus
+        group: monitoring
+        mode: "0644"
+      loop:
+        - server-ca.crt
+        - client-admin.crt
+        - client-admin.key
+
+    - name: Copy node token for kubelet metrics
+      ansible.builtin.copy:
+        content: "{{ hostvars[groups['master'][0]].rke2_token | default('your-token-here') }}"
+        dest: /var/lib/rancher/rke2/server/node-token
+        owner: prometheus
+        group: monitoring
+        mode: "0600"
+
+    - name: Restart Prometheus to apply certificate changes
+      ansible.builtin.systemd:
+        name: prometheus
+        state: restarted
+
+- name: Deploy Promtail on Kubernetes nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - promtail
+
+- name: Deploy Promtail on monitoring server
+  hosts: monitoring
+  become: true
+  gather_facts: true
+  roles:
+    - promtail
+
+- name: Deploy Promtail on external VMs (optional)
+  hosts: "{{ groups['external_vms'] | default([]) }}"
+  become: true
+  gather_facts: true
+  roles:
+    - promtail
+
+- name: Deploy OTel Collector on Kubernetes nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - otel-collector
+
+- name: Deploy OTel Collector on monitoring server
+  hosts: monitoring
+  become: true
+  gather_facts: true
+  roles:
+    - otel-collector
+
+- name: Deploy OTel Collector on external VMs (optional)
+  hosts: "{{ groups['external_vms'] | default([]) }}"
+  become: true
+  gather_facts: true
+  roles:
+    - otel-collector
+
+- name: Display monitoring information
+  hosts: monitoring
+  gather_facts: false
+  tasks:
+    - name: Show monitoring URLs
+      ansible.builtin.debug:
+        msg:
+          - "╔═══════════════════════════════════════════════════════════════╗"
+          - "║     🎉 Monitoring Stack Deployed Successfully! 🎉            ║"
+          - "╠═══════════════════════════════════════════════════════════════╣"
+          - "║  Prometheus: http://{{ ansible_host }}:9090                     "
+          - "║  Grafana:    http://{{ ansible_host }}:3000                     "
+          - "║              Login: admin / admin (Please change!)             "
+          - "║                                                                 "
+          - "║  📊 Next Steps:                                                "
+          - "║  1. Access Grafana and change the default password             "
+          - "║  2. Add Prometheus data source in Grafana:                     "
+          - "║     URL: http://localhost:9090                                 "
+          - "║  3. Import Kubernetes dashboards:                              "
+          - "║     - Dashboard ID 315:   Kubernetes cluster monitoring        "
+          - "║     - Dashboard ID 6417:  Kubernetes cluster (Prometheus)      "
+          - "║     - Dashboard ID 12740: Kubernetes monitoring                "
+          - "║     - Dashboard ID 1860:  Node Exporter Full                   "
+          - "║                                                                 "
+          - "║  Loki:     http://{{ ansible_host }}:3100                       "
+          - "║              (Log aggregation - query via Grafana)             "
+          - "║                                                                 "
+          - "║  🔍 Targets being monitored:                                   "
+          - "║  - Prometheus itself                                           "
+          - "║  - {{ groups['master'] | length }} Kubernetes master node(s)   "
+          - "║  - {{ groups['worker'] | length }} Kubernetes worker node(s)   "
+          - "║  - Monitoring server                                           "
+          - "║                                                                 "
+          - "║  📋 Log collection (Promtail → Loki):                          "
+          - "║  - System logs (syslog, auth, kernel)                          "
+          - "║  - Systemd journal                                             "
+          - "║  - RKE2 logs                                                   "
+          - "║  - Kubernetes pod logs                                         "
+          - "║                                                                 "
+          - "║  🔗 Distributed Tracing (OTel → Tempo):                        "
+          - "║  - Tempo:  http://{{ ansible_host }}:3200                       "
+          - "║  - OTLP gRPC: :4317  |  OTLP HTTP: :4318                      "
+          - "║  - Jaeger: :14268    |  Zipkin: :9411                          "
+          - "║  - Traces ↔ Logs ↔ Metrics correlation enabled                 "
+          - "║  - Service graph & RED metrics auto-generated                  "
+          - "║  - Tail sampling: 100% errors, >1s latency, 25% normal        "
+          - "╚═══════════════════════════════════════════════════════════════╝"

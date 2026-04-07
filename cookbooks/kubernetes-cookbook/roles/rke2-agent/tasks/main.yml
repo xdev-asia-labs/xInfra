@@ -1,0 +1,72 @@
+---
+- name: Create RKE2 config directory
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: "0755"
+
+- name: Get node token from first master
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  register: node_token_content
+  delegate_to: "{{ groups['master'][0] }}"
+  run_once: true
+
+- name: Set node token fact for agents
+  ansible.builtin.set_fact:
+    rke2_node_token: "{{ node_token_content.content | b64decode | trim }}"
+
+- name: Set RKE2 API IP from first master
+  ansible.builtin.set_fact:
+    rke2_api_ip: "{{ hostvars[groups['master'][0]]['ansible_host'] }}"
+  when: rke2_api_ip is not defined or rke2_api_ip == ''
+
+- name: Configure container registry
+  ansible.builtin.include_tasks: registry.yml
+
+- name: Create RKE2 agent config file
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: "0600"
+
+- name: Download RKE2 installation script
+  ansible.builtin.get_url:
+    url: https://get.rke2.io
+    dest: /tmp/rke2-install.sh
+    mode: "0755"
+
+- name: Install RKE2 agent
+  ansible.builtin.shell: /tmp/rke2-install.sh
+  args:
+    creates: /usr/local/bin/rke2
+  environment:
+    INSTALL_RKE2_CHANNEL: "{{ rke2_channel }}"
+    INSTALL_RKE2_TYPE: "agent"
+    INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+
+- name: Enable and start RKE2 agent service
+  ansible.builtin.systemd:
+    name: rke2-agent
+    state: started
+    enabled: true
+
+- name: Wait for agent to be ready
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Verify node joined cluster
+  ansible.builtin.shell: |
+    /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  register: node_status
+  until: node_status.stdout == "True"
+  retries: 30
+  delay: 10
+  changed_when: false
+  delegate_to: "{{ groups['master'][0] }}"
+
+- name: Create kubectl symlink
+  ansible.builtin.file:
+    src: /var/lib/rancher/rke2/bin/kubectl
+    dest: /usr/local/bin/kubectl
+    state: link

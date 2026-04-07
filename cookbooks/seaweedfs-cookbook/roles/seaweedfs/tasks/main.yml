@@ -1,0 +1,180 @@
+---
+- name: Install dependencies
+  apt:
+    name:
+      - wget
+      - tar
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install dependencies (RedHat)
+  yum:
+    name:
+      - wget
+      - tar
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Create SeaweedFS user
+  user:
+    name: seaweedfs
+    system: yes
+    shell: /bin/false
+    home: "{{ seaweedfs_data_dir }}"
+
+- name: Create directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: seaweedfs
+    group: seaweedfs
+    mode: "0755"
+  loop:
+    - "{{ seaweedfs_data_dir }}"
+    - "{{ seaweedfs_data_dir }}/master"
+    - "{{ seaweedfs_data_dir }}/volume"
+    - "{{ seaweedfs_data_dir }}/filer"
+    - "{{ seaweedfs_log_dir }}"
+
+- name: Create S3 config directory
+  file:
+    path: "{{ s3_config_dir }}"
+    state: directory
+    owner: seaweedfs
+    group: seaweedfs
+    mode: "0755"
+
+- name: Create S3 config file
+  template:
+    src: s3.config.json.j2
+    dest: "{{ s3_config_dir }}/s3.config.json"
+    owner: seaweedfs
+    group: seaweedfs
+    mode: "0600"
+  notify: restart seaweedfs-s3
+
+- name: Check if SeaweedFS is already installed
+  stat:
+    path: "{{ seaweedfs_install_dir }}/weed"
+  register: weed_binary
+
+- name: Download SeaweedFS
+  get_url:
+    url: "{{ seaweedfs_download_url }}"
+    dest: "/tmp/seaweedfs.tar.gz"
+    mode: "0644"
+  when: not weed_binary.stat.exists
+
+- name: Extract SeaweedFS
+  unarchive:
+    src: "/tmp/seaweedfs.tar.gz"
+    dest: "{{ seaweedfs_install_dir }}"
+    remote_src: yes
+    mode: "0755"
+  when: not weed_binary.stat.exists
+
+- name: Set SeaweedFS binary permissions
+  file:
+    path: "{{ seaweedfs_install_dir }}/weed"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create systemd service for master
+  template:
+    src: seaweedfs-master.service.j2
+    dest: /etc/systemd/system/seaweedfs-master.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Create systemd service for volume
+  template:
+    src: seaweedfs-volume.service.j2
+    dest: /etc/systemd/system/seaweedfs-volume.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Create systemd service for filer
+  template:
+    src: seaweedfs-filer.service.j2
+    dest: /etc/systemd/system/seaweedfs-filer.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Create systemd service for S3
+  template:
+    src: seaweedfs-s3.service.j2
+    dest: /etc/systemd/system/seaweedfs-s3.service
+    mode: "0644"
+  notify: reload systemd
+
+- name: Flush handlers
+  meta: flush_handlers
+
+- name: Start and enable SeaweedFS Master
+  systemd:
+    name: seaweedfs-master
+    state: started
+    enabled: yes
+
+- name: Wait for Master to be ready
+  wait_for:
+    port: "{{ master_port }}"
+    delay: 2
+    timeout: 30
+
+- name: Start and enable SeaweedFS Volume
+  systemd:
+    name: seaweedfs-volume
+    state: started
+    enabled: yes
+
+- name: Wait for Volume to be ready
+  wait_for:
+    port: "{{ volume_port }}"
+    delay: 2
+    timeout: 30
+
+- name: Start and enable SeaweedFS Filer
+  systemd:
+    name: seaweedfs-filer
+    state: started
+    enabled: yes
+
+- name: Wait for Filer to be ready
+  wait_for:
+    port: "{{ filer_port }}"
+    delay: 2
+    timeout: 30
+
+- name: Start and enable SeaweedFS S3
+  systemd:
+    name: seaweedfs-s3
+    state: started
+    enabled: yes
+
+- name: Wait for S3 to be ready
+  wait_for:
+    port: "{{ s3_port }}"
+    delay: 2
+    timeout: 30
+
+- name: Disable UFW firewall for internal communication
+  ufw:
+    state: disabled
+  ignore_errors: yes
+
+- name: Display access information
+  debug:
+    msg:
+      - "SeaweedFS deployed successfully!"
+      - "Access endpoints:"
+      - "  Master UI: http://{{ ansible_host }}:{{ master_port }}"
+      - "  Volume Server: http://{{ ansible_host }}:{{ volume_port }}"
+      - "  Filer UI: http://{{ ansible_host }}:{{ filer_port }}"
+      - "  S3 API: http://{{ ansible_host }}:{{ s3_port }}"
+      - ""
+      - "S3 Credentials:"
+      - "  Access Key: {{ s3_admin_access_key }}"
+      - "  Secret Key: {{ s3_admin_secret_key }}"

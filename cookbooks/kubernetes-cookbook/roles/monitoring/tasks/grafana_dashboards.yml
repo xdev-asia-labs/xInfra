@@ -1,0 +1,353 @@
+---
+# Grafana provisioning tasks
+# Auto-provision data sources and dashboards
+
+- name: Create Grafana provisioning directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: grafana
+    group: monitoring
+    mode: "0755"
+  loop:
+    - /etc/grafana/provisioning
+    - /etc/grafana/provisioning/datasources
+    - /etc/grafana/provisioning/dashboards
+    - /var/lib/grafana/dashboards
+
+- name: Fix datasource UIDs in Grafana database (ensure consistent UIDs)
+  ansible.builtin.shell: |
+    python3 << 'PYEOF'
+    import sqlite3, os
+    db = "/var/lib/grafana/grafana.db"
+    if not os.path.exists(db):
+        print("No grafana.db yet - skipping")
+        exit(0)
+    conn = sqlite3.connect(db)
+    c = conn.cursor()
+    uid_map = {"Prometheus": "prometheus", "Loki": "loki", "Tempo": "tempo"}
+    changed = False
+    for name, uid in uid_map.items():
+        c.execute("SELECT uid FROM data_source WHERE name = ?", (name,))
+        row = c.fetchone()
+        if row and row[0] != uid:
+            c.execute("UPDATE data_source SET uid = ? WHERE name = ?", (uid, name))
+            print(f"Updated {name}: {row[0]} -> {uid}")
+            changed = True
+    if changed:
+        conn.commit()
+        print("UIDs updated")
+    else:
+        print("UIDs already correct")
+    conn.close()
+    PYEOF
+  changed_when: false
+
+- name: Provision Prometheus data source
+  ansible.builtin.copy:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          uid: prometheus
+          access: proxy
+          url: http://localhost:9090
+          isDefault: true
+          editable: true
+          jsonData:
+            timeInterval: '15s'
+            httpMethod: POST
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Provision Loki data source (with Tempo trace linking)
+  ansible.builtin.copy:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Loki
+          type: loki
+          uid: loki
+          access: proxy
+          url: http://localhost:3100
+          editable: true
+          jsonData:
+            maxLines: 1000
+            derivedFields:
+              - datasourceUid: tempo
+                matcherRegex: '(?:trace_id|traceId|traceID|TraceId|traceid)[=: ]+"?(\w+)"?'
+                name: TraceID
+                url: '$${__value.raw}'
+                urlDisplayLabel: 'View Trace'
+              - datasourceUid: tempo
+                matcherRegex: '(?:span_id|spanId|spanID|SpanId)[=: ]+"?(\w+)"?'
+                name: SpanID
+                url: ''
+    dest: /etc/grafana/provisioning/datasources/loki.yml
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Provision Tempo data source (with Loki & Prometheus linking)
+  ansible.builtin.copy:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Tempo
+          type: tempo
+          uid: tempo
+          access: proxy
+          url: http://localhost:3200
+          editable: true
+          jsonData:
+            httpMethod: GET
+            tracesToLogsV2:
+              datasourceUid: loki
+              spanStartTimeShift: '-1h'
+              spanEndTimeShift: '1h'
+              filterByTraceID: true
+              filterBySpanID: true
+              customQuery: true
+              query: '{$${__tags}} |= "$${__trace.traceId}"'
+            tracesToMetrics:
+              datasourceUid: prometheus
+              spanStartTimeShift: '-1h'
+              spanEndTimeShift: '1h'
+              tags:
+                - key: service.name
+                  value: service_name
+              queries:
+                - name: 'Request rate'
+                  query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))'
+                - name: 'Error rate'
+                  query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[5m]))'
+                - name: 'P95 latency'
+                  query: 'histogram_quantile(0.95, sum(rate(traces_spanmetrics_latency_bucket{$$__tags}[5m])) by (le))'
+            serviceMap:
+              datasourceUid: prometheus
+            nodeGraph:
+              enabled: true
+            search:
+              hide: false
+            lokiSearch:
+              datasourceUid: loki
+            traceQuery:
+              timeShiftEnabled: true
+              spanStartTimeShift: '1h'
+              spanEndTimeShift: '-1h'
+    dest: /etc/grafana/provisioning/datasources/tempo.yml
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Provision dashboard provider
+  ansible.builtin.copy:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          updateIntervalSeconds: 30
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+            foldersFromFilesStructure: false
+    dest: /etc/grafana/provisioning/dashboards/default.yml
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Download Node Exporter Full dashboard (ID 1860)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/1860/revisions/37/download"
+    dest: /var/lib/grafana/dashboards/node-exporter-full.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_1860
+  ignore_errors: true
+
+- name: Download Kubernetes Cluster Monitoring dashboard (ID 315)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/315/revisions/3/download"
+    dest: /var/lib/grafana/dashboards/k8s-cluster-monitoring.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_315
+  ignore_errors: true
+
+- name: Download Kubernetes Cluster (Prometheus) dashboard (ID 6417)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/6417/revisions/1/download"
+    dest: /var/lib/grafana/dashboards/k8s-cluster-prometheus.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_6417
+  ignore_errors: true
+
+- name: Download Prometheus Stats dashboard (ID 2)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/2/revisions/2/download"
+    dest: /var/lib/grafana/dashboards/prometheus-stats.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_2
+  ignore_errors: true
+
+- name: Download Loki Logs dashboard (ID 13639)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/13639/revisions/2/download"
+    dest: /var/lib/grafana/dashboards/loki-logs.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_13639
+  ignore_errors: true
+
+- name: Download Loki & Promtail dashboard (ID 10880)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/10880/revisions/1/download"
+    dest: /var/lib/grafana/dashboards/loki-promtail.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_10880
+  ignore_errors: true
+
+- name: Download OpenTelemetry Collector dashboard (ID 15983)
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/15983/revisions/3/download"
+    dest: /var/lib/grafana/dashboards/otel-collector.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  register: download_15983
+  ignore_errors: true
+
+- name: Create custom Monitoring Overview dashboard
+  ansible.builtin.template:
+    src: dashboard-monitoring-overview.json.j2
+    dest: /var/lib/grafana/dashboards/monitoring-overview.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Create custom Tracing Overview dashboard
+  ansible.builtin.template:
+    src: dashboard-tracing-overview.json.j2
+    dest: /var/lib/grafana/dashboards/tracing-overview.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Create custom Service Map dashboard
+  ansible.builtin.template:
+    src: dashboard-service-map.json.j2
+    dest: /var/lib/grafana/dashboards/service-map.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Create custom Spring Boot JVM dashboard
+  ansible.builtin.template:
+    src: dashboard-spring-boot.json.j2
+    dest: /var/lib/grafana/dashboards/spring-boot-jvm.json
+    owner: grafana
+    group: monitoring
+    mode: "0644"
+  notify: restart grafana
+
+- name: Fix datasource references in all downloaded dashboards
+  ansible.builtin.shell: |
+    for f in /var/lib/grafana/dashboards/node-exporter-full.json \
+             /var/lib/grafana/dashboards/k8s-cluster-monitoring.json \
+             /var/lib/grafana/dashboards/k8s-cluster-prometheus.json \
+             /var/lib/grafana/dashboards/prometheus-stats.json \
+             /var/lib/grafana/dashboards/loki-logs.json \
+             /var/lib/grafana/dashboards/loki-promtail.json \
+             /var/lib/grafana/dashboards/otel-collector.json; do
+      [ -f "$f" ] || continue
+      python3 -c "
+    import json
+    with open('$f', 'r') as fh:
+        content = fh.read()
+    content = content.replace('\${DS_PROMETHEUS}', 'prometheus')
+    content = content.replace('\${DS_LOKI}', 'loki')
+    content = content.replace('\${DS_TEMPO}', 'tempo')
+    data = json.loads(content)
+    data['id'] = None
+    for key in ['__inputs', '__requires', '__elements']:
+        data.pop(key, None)
+    def fix_ds(obj):
+        if isinstance(obj, dict):
+            if 'datasource' in obj:
+                ds = obj['datasource']
+                if isinstance(ds, str):
+                    dl = ds.lower()
+                    if 'prometheus' in dl or ds == 'prometheus':
+                        obj['datasource'] = {'uid': 'prometheus', 'type': 'prometheus'}
+                    elif 'loki' in dl:
+                        obj['datasource'] = {'uid': 'loki', 'type': 'loki'}
+                    elif 'tempo' in dl:
+                        obj['datasource'] = {'uid': 'tempo', 'type': 'tempo'}
+                elif isinstance(ds, dict):
+                    ds_type = ds.get('type', '')
+                    if 'uid' not in ds or ds.get('uid','').startswith('\$'):
+                        if 'prometheus' in ds_type:
+                            ds['uid'] = 'prometheus'
+                        elif 'loki' in ds_type:
+                            ds['uid'] = 'loki'
+                        elif 'tempo' in ds_type:
+                            ds['uid'] = 'tempo'
+            for v in obj.values():
+                fix_ds(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                fix_ds(item)
+    fix_ds(data)
+    with open('$f', 'w') as fh:
+        json.dump(data, fh, indent=2)
+    " 2>/dev/null || true
+    done
+  changed_when: true
+
+- name: Fix datasource UID references in all dashboards
+  ansible.builtin.shell: |
+    for f in /var/lib/grafana/dashboards/*.json; do
+      python3 -c "
+    import json
+    with open('$f', 'r') as fh:
+        data = json.load(fh)
+    data['id'] = None
+    for key in ['__inputs', '__requires', '__elements']:
+        data.pop(key, None)
+    with open('$f', 'w') as fh:
+        json.dump(data, fh, indent=2)
+    " 2>/dev/null || true
+    done
+  changed_when: true
+
+- name: Remove old broken dashboard files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/grafana/dashboards/tempo-apm.json
+  ignore_errors: true

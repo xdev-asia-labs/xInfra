@@ -1,0 +1,9 @@
+---
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart seaweedfs-s3
+  systemd:
+    name: seaweedfs-s3
+    state: restarted

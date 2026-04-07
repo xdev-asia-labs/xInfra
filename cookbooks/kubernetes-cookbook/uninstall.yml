@@ -1,0 +1,122 @@
+---
+# Uninstall RKE2 Cluster Playbook
+# WARNING: This will completely remove RKE2 from all nodes
+
+- name: Uninstall RKE2 from all nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Check if RKE2 server service exists
+      ansible.builtin.systemd:
+        name: rke2-server
+      register: rke2_server_service
+      when: inventory_hostname in groups['master']
+      ignore_errors: true
+
+    - name: Stop RKE2 server service
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: stopped
+      when:
+        - inventory_hostname in groups['master']
+        - rke2_server_service is defined
+        - rke2_server_service.status is defined
+      ignore_errors: true
+
+    - name: Check if RKE2 agent service exists
+      ansible.builtin.systemd:
+        name: rke2-agent
+      register: rke2_agent_service
+      when: inventory_hostname in groups['worker']
+      ignore_errors: true
+
+    - name: Stop RKE2 agent service
+      ansible.builtin.systemd:
+        name: rke2-agent
+        state: stopped
+      when:
+        - inventory_hostname in groups['worker']
+        - rke2_agent_service is defined
+        - rke2_agent_service.status is defined
+      ignore_errors: true
+
+    - name: Check if RKE2 server uninstall script exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/rke2-uninstall.sh
+      register: rke2_server_uninstall_script
+      when: inventory_hostname in groups['master']
+
+    - name: Run RKE2 uninstall script for servers
+      ansible.builtin.shell: /usr/local/bin/rke2-uninstall.sh
+      when:
+        - inventory_hostname in groups['master']
+        - rke2_server_uninstall_script.stat.exists | default(false)
+      ignore_errors: true
+
+    - name: Check if RKE2 agent uninstall script exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/rke2-agent-uninstall.sh
+      register: rke2_agent_uninstall_script
+      when: inventory_hostname in groups['worker']
+
+    - name: Run RKE2 uninstall script for agents
+      ansible.builtin.shell: /usr/local/bin/rke2-agent-uninstall.sh
+      when:
+        - inventory_hostname in groups['worker']
+        - rke2_agent_uninstall_script.stat.exists | default(false)
+      ignore_errors: true
+
+    - name: Find kubelet mounts
+      ansible.builtin.shell: "mount | grep '/var/lib/kubelet' | awk '{print $3}' | sort -r"
+      register: kubelet_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Unmount kubelet directories
+      ansible.builtin.command: "umount {{ item }}"
+      loop: "{{ kubelet_mounts.stdout_lines }}"
+      when: kubelet_mounts.stdout_lines | length > 0
+      ignore_errors: true
+
+    - name: Find k3s mounts
+      ansible.builtin.shell: "mount | grep '/run/k3s' | awk '{print $3}' | sort -r"
+      register: k3s_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Unmount k3s directories
+      ansible.builtin.command: "umount {{ item }}"
+      loop: "{{ k3s_mounts.stdout_lines }}"
+      when: k3s_mounts.stdout_lines | length > 0
+      ignore_errors: true
+
+    - name: Remove RKE2 directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+        - /var/lib/kubelet
+        - /run/k3s
+        - /usr/local/bin/kubectl
+      ignore_errors: true
+
+    - name: Remove RKE2 sysctl config
+      ansible.builtin.file:
+        path: /etc/sysctl.d/99-rke2.conf
+        state: absent
+
+    - name: Clean iptables rules
+      ansible.builtin.shell: |
+        iptables -F
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -X
+      ignore_errors: true
+
+    - name: Reboot nodes
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when: ansible_os_family in ['RedHat', 'Debian']

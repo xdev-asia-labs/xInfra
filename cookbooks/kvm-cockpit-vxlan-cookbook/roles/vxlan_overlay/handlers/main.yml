@@ -1,0 +1,9 @@
+---
+- name: apply vxlan netplan
+  command: netplan apply
+  async: 30
+  poll: 0
+
+- name: Wait for network to stabilize
+  wait_for:
+    timeout: 5

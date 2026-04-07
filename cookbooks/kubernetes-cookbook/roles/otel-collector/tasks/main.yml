@@ -1,0 +1,111 @@
+---
+# OpenTelemetry Collector installation tasks
+# Deployed on all nodes to collect and forward traces to Tempo
+
+- name: Create otel user
+  ansible.builtin.user:
+    name: otel
+    groups:
+      - adm
+      - systemd-journal
+    shell: /bin/false
+    system: true
+    create_home: false
+    append: true
+
+- name: Create OTel Collector directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: otel
+    group: adm
+    mode: "0755"
+  loop:
+    - /etc/otel-collector
+    - /var/lib/otel-collector
+
+- name: Check if OTel Collector is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/otelcol-contrib
+  register: otel_binary
+
+- name: Download OTel Collector contrib
+  ansible.builtin.get_url:
+    url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_collector_version }}/otelcol-contrib_{{ otel_collector_version }}_linux_amd64.tar.gz"
+    dest: /tmp/otelcol-contrib.tar.gz
+    mode: "0644"
+  when: not otel_binary.stat.exists
+
+- name: Create temp directory for OTel extraction
+  ansible.builtin.file:
+    path: /tmp/otel-extract
+    state: directory
+    mode: "0755"
+  when: not otel_binary.stat.exists
+
+- name: Extract OTel Collector
+  ansible.builtin.unarchive:
+    src: /tmp/otelcol-contrib.tar.gz
+    dest: /tmp/otel-extract
+    remote_src: true
+  when: not otel_binary.stat.exists
+
+- name: Copy OTel Collector binary
+  ansible.builtin.copy:
+    src: /tmp/otel-extract/otelcol-contrib
+    dest: /usr/local/bin/otelcol-contrib
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when: not otel_binary.stat.exists
+
+- name: Create OTel Collector configuration
+  ansible.builtin.template:
+    src: otel-collector-config.yml.j2
+    dest: /etc/otel-collector/config.yml
+    owner: otel
+    group: adm
+    mode: "0644"
+  notify: restart otel-collector
+
+- name: Create OTel Collector systemd service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=OpenTelemetry Collector Contrib
+      Documentation=https://opentelemetry.io/docs/collector/
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=root
+      ExecStart=/usr/local/bin/otelcol-contrib \
+        --config=/etc/otel-collector/config.yml
+
+      SyslogIdentifier=otelcol
+      Restart=always
+      RestartSec=5
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/otel-collector.service
+    mode: "0644"
+  notify: restart otel-collector
+
+- name: Enable and start OTel Collector service
+  ansible.builtin.systemd:
+    name: otel-collector
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Cleanup OTel installation files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/otelcol-contrib.tar.gz
+    - /tmp/otel-extract

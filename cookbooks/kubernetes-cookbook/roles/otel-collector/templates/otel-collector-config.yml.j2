@@ -1,0 +1,234 @@
+# OpenTelemetry Collector Configuration
+# {{ ansible_managed }}
+#
+# Architecture: App → OTel Collector (this node) → Tempo (monitoring VM)
+# Receives traces via OTLP, Jaeger, Zipkin protocols
+# Forwards to Grafana Tempo for storage and querying
+
+receivers:
+  # OTLP receiver - primary protocol for modern apps
+  otlp:
+    protocols:
+      grpc:
+{% if 'monitoring' in group_names %}
+        endpoint: "0.0.0.0:4327"   # Alternate port (Tempo uses 4317)
+{% else %}
+        endpoint: "0.0.0.0:4317"
+{% endif %}
+      http:
+{% if 'monitoring' in group_names %}
+        endpoint: "0.0.0.0:4328"   # Alternate port (Tempo uses 4318)
+{% else %}
+        endpoint: "0.0.0.0:4318"
+{% endif %}
+        cors:
+          allowed_origins:
+            - "*"
+
+{% if 'monitoring' not in group_names %}
+  # Jaeger receiver - for Jaeger-compatible SDKs
+  jaeger:
+    protocols:
+      thrift_http:
+        endpoint: "0.0.0.0:14268"
+      grpc:
+        endpoint: "0.0.0.0:14250"
+      thrift_compact:
+        endpoint: "0.0.0.0:6831"
+
+  # Zipkin receiver - for Zipkin-compatible SDKs
+  zipkin:
+    endpoint: "0.0.0.0:9411"
+{% endif %}
+
+  # Host metrics - for correlation with infrastructure
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      disk:
+      network:
+      load:
+
+{% if 'master' in group_names or 'worker' in group_names %}
+  # Kubernetes objects receiver - collect K8s events as logs
+  filelog:
+    include:
+      - /var/log/pods/*/containers/*.log
+    include_file_name: false
+    include_file_path: true
+    operators:
+      - type: router
+        id: get_format
+        routes:
+          - output: parser-containerd
+            expr: 'body matches "^[^ Z]+ "'
+      - type: regex_parser
+        id: parser-containerd
+        regex: '^(?P<time>[^ Z]+) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$'
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+      - type: move
+        from: attributes.log
+        to: body
+{% endif %}
+
+processors:
+  # Batch processor - batches telemetry data before export
+  batch:
+    send_batch_size: 10000
+    timeout: 5s
+    send_batch_max_size: 11000
+
+  # Memory limiter - prevents OOM
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Resource detection - auto-detect host info
+  resourcedetection:
+    detectors:
+      - system
+    system:
+      hostname_sources:
+        - os
+      resource_attributes:
+        host.name:
+          enabled: true
+        host.id:
+          enabled: true
+        os.type:
+          enabled: true
+
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.instance.id
+        from_attribute: host.name
+        action: upsert
+      - key: deployment.environment
+        value: production
+        action: upsert
+      - key: k8s.cluster.name
+        value: rke2-cluster
+        action: upsert
+{% if 'master' in group_names %}
+      - key: k8s.node.role
+        value: master
+        action: upsert
+{% elif 'worker' in group_names %}
+      - key: k8s.node.role
+        value: worker
+        action: upsert
+{% elif 'monitoring' in group_names %}
+      - key: k8s.node.role
+        value: monitoring
+        action: upsert
+{% endif %}
+
+  # Tail sampling - sample-based on trace characteristics
+  # Keep all error traces, sample normal traces
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      # Always keep error traces
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+      # Always keep slow traces (> 1s)
+      - name: latency-policy
+        type: latency
+        latency:
+          threshold_ms: 1000
+      # Sample 25% of remaining traces
+      - name: probabilistic-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 25
+
+  # Span metrics connector attributes
+  attributes:
+    actions:
+      - key: http.method
+        action: upsert
+        from_attribute: http.request.method
+      - key: http.status_code
+        action: upsert
+        from_attribute: http.response.status_code
+
+exporters:
+  # OTLP exporter - send traces to Tempo
+  otlp:
+    endpoint: "{{ tempo_url }}:4317"
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 5000
+
+  # Debug exporter - for troubleshooting (minimal verbosity)
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  zpages:
+    endpoint: "0.0.0.0:55679"
+
+service:
+  extensions:
+    - health_check
+    - zpages
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: "0.0.0.0:8888"
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+{% if 'monitoring' not in group_names %}
+        - jaeger
+        - zipkin
+{% endif %}
+      processors:
+        - memory_limiter
+        - resourcedetection
+        - resource
+        - attributes
+        - tail_sampling
+        - batch
+      exporters:
+        - otlp
+    # Metrics pipeline disabled - host metrics are collected by Node Exporter
+    # metrics:
+    #   receivers:
+    #     - hostmetrics
+    #   processors:
+    #     - memory_limiter
+    #     - resourcedetection
+    #     - resource
+    #     - batch
+    #   exporters:
+    #     - otlp

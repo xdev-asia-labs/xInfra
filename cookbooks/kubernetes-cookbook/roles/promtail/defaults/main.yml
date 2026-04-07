@@ -1,0 +1,4 @@
+---
+# Promtail default variables
+promtail_version: "3.6.5"
+loki_url: "http://{{ hostvars[groups['monitoring'][0]].ansible_host }}:3100"

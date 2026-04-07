@@ -1,0 +1,57 @@
+---
+- name: Create VM private network XML definition
+  template:
+    src: vm-private-network.xml.j2
+    dest: /tmp/vm-private-network.xml
+    mode: "0644"
+
+- name: Check if vm-private network exists
+  command: virsh net-list --all --name
+  register: existing_networks
+  changed_when: false
+
+- name: Define vm-private network
+  command: virsh net-define /tmp/vm-private-network.xml
+  when: vm_private_network_name not in existing_networks.stdout_lines
+
+- name: Start vm-private network
+  command: virsh net-start {{ vm_private_network_name }}
+  when: vm_private_network_name not in existing_networks.stdout_lines
+  ignore_errors: yes
+
+- name: Enable autostart for vm-private network
+  command: virsh net-autostart {{ vm_private_network_name }}
+
+- name: Get network list
+  command: virsh net-list --all
+  register: network_list
+  changed_when: false
+
+- name: Display network list
+  debug:
+    msg: "{{ network_list.stdout_lines }}"
+
+- name: Get vm-private network info
+  command: virsh net-info {{ vm_private_network_name }}
+  register: vm_private_info
+  changed_when: false
+
+- name: Display vm-private network info
+  debug:
+    msg: "{{ vm_private_info.stdout_lines }}"
+
+- name: Verify virbr1 interface exists
+  command: ip addr show {{ vm_private_bridge }}
+  register: virbr1_check
+  changed_when: false
+  failed_when: false
+
+- name: Display virbr1 configuration
+  debug:
+    msg: "{{ virbr1_check.stdout_lines }}"
+  when: virbr1_check.rc == 0
+
+- name: Clean up temporary XML file
+  file:
+    path: /tmp/vm-private-network.xml
+    state: absent

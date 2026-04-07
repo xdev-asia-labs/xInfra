@@ -1,0 +1,14 @@
+<network>
+  <name>{{ vm_private_network_name }}</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='{{ vm_private_bridge }}' stp='on' delay='0'/>
+  <ip address='{{ vm_private_gateway }}' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='{{ dhcp_range_start }}' end='{{ dhcp_range_end }}'/>
+    </dhcp>
+  </ip>
+</network>

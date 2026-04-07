@@ -1,0 +1,113 @@
+---
+- name: Create VXLAN netplan configuration
+  template:
+    src: 02-vxlan.yaml.j2
+    dest: /etc/netplan/02-vxlan.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Display warning about netplan apply
+  debug:
+    msg: |
+      WARNING: VXLAN netplan configuration created but NOT applied automatically.
+      This prevents network disconnection during Ansible run.
+
+      To apply VXLAN configuration manually on each node:
+      1. SSH to the node directly (from a console or local access)
+      2. Run: sudo netplan apply
+      3. Verify VXLAN interface: ip -d link show vxlan0
+
+      DO NOT run 'netplan apply' over SSH as it will disconnect your session!
+
+- name: Check if VXLAN interface already exists
+  command: ip -d link show {{ vxlan_interface }}
+  register: vxlan_link
+  changed_when: false
+  failed_when: false
+
+- name: Display VXLAN interface status
+  debug:
+    msg: "{{ 'VXLAN interface exists' if vxlan_link.rc == 0 else 'VXLAN interface NOT created yet - run netplan apply manually' }}"
+
+- name: Create VXLAN network XML definition
+  template:
+    src: vxlan-network.xml.j2
+    dest: /tmp/vxlan-network.xml
+    mode: "0644"
+
+- name: Check if vxlan-net network exists
+  command: virsh net-list --all --name
+  register: existing_networks
+  changed_when: false
+
+- name: Define vxlan-net network
+  command: virsh net-define /tmp/vxlan-network.xml
+  when: vxlan_network_name not in existing_networks.stdout_lines
+
+- name: Start vxlan-net network
+  command: virsh net-start {{ vxlan_network_name }}
+  when: vxlan_network_name not in existing_networks.stdout_lines
+  ignore_errors: yes
+
+- name: Enable autostart for vxlan-net network
+  command: virsh net-autostart {{ vxlan_network_name }}
+
+- name: Get VXLAN network info
+  command: virsh net-info {{ vxlan_network_name }}
+  register: vxlan_net_info
+  changed_when: false
+
+- name: Display VXLAN network info
+  debug:
+    msg: "{{ vxlan_net_info.stdout_lines }}"
+
+- name: Clean up temporary XML file
+  file:
+    path: /tmp/vxlan-network.xml
+    state: absent
+
+- name: Wait for libvirt network bridge to be created
+  wait_for:
+    path: /sys/class/net/virbr-vxlan
+    timeout: 30
+  ignore_errors: yes
+
+- name: Get libvirt VXLAN network bridge name
+  shell: virsh net-info {{ vxlan_network_name }} | grep 'Bridge:' | awk '{print $2}'
+  register: vxlan_bridge_name
+  changed_when: false
+
+- name: Connect VXLAN interface to libvirt bridge
+  shell: |
+    if [ -d /sys/class/net/{{ vxlan_interface }} ] && [ -d /sys/class/net/{{ vxlan_bridge_name.stdout }} ]; then
+      # Remove from old bridge if exists
+      CURRENT_MASTER=$(ip -o link show {{ vxlan_interface }} | grep -oP 'master \K\S+')
+      if [ -n "$CURRENT_MASTER" ] && [ "$CURRENT_MASTER" != "{{ vxlan_bridge_name.stdout }}" ]; then
+        ip link set {{ vxlan_interface }} nomaster
+      fi
+      # Add to libvirt bridge
+      if [ "$CURRENT_MASTER" != "{{ vxlan_bridge_name.stdout }}" ]; then
+        ip link set {{ vxlan_interface }} master {{ vxlan_bridge_name.stdout }}
+        ip link set {{ vxlan_interface }} up
+        echo "CHANGED"
+      else
+        echo "ALREADY_CONNECTED"
+      fi
+    else
+      echo "INTERFACE_NOT_FOUND"
+      exit 0
+    fi
+  register: vxlan_bridge_connect
+  changed_when: "'CHANGED' in vxlan_bridge_connect.stdout"
+
+- name: Verify VXLAN bridge connection
+  command: brctl show {{ vxlan_bridge_name.stdout }}
+  register: bridge_status
+  changed_when: false
+  when: vxlan_bridge_name.stdout != ""
+
+- name: Display VXLAN bridge status
+  debug:
+    msg: "{{ bridge_status.stdout_lines }}"
+  when: vxlan_bridge_name.stdout != ""

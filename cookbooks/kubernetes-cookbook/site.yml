@@ -1,0 +1,85 @@
+---
+# RKE2 HA Cluster Installation Playbook
+# This playbook installs a highly available RKE2 Kubernetes cluster
+
+- name: Load registry and complex variables
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/registry.yml
+  tasks:
+    - name: Set registry facts for all hosts
+      ansible.builtin.set_fact:
+        registries: "{{ registries }}"
+        registry_mirrors: "{{ registry_mirrors }}"
+        insecure_registries: "{{ insecure_registries }}"
+        rke2_tls_san: "{{ rke2_tls_san }}"
+        rke2_disable: "{{ rke2_disable }}"
+        rke2_server_node_taints: "{{ rke2_server_node_taints }}"
+        rke2_kubelet_args: "{{ rke2_kubelet_args }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['rke2_cluster'] }}"
+
+- name: Prepare all nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - prereq
+
+- name: Install RKE2 on first master node
+  hosts: master[0]
+  become: true
+  serial: 1
+  roles:
+    - rke2-server
+
+- name: Install RKE2 on additional master nodes
+  hosts: master[1:]
+  become: true
+  serial: 1
+  roles:
+    - rke2-server
+
+- name: Install RKE2 on worker nodes
+  hosts: worker
+  become: true
+  roles:
+    - rke2-agent
+
+- name: Display cluster information
+  hosts: master[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Get cluster nodes
+      ansible.builtin.command: /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+
+    - name: Display nodes
+      ansible.builtin.debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+
+    - name: Get cluster info
+      ansible.builtin.command: /var/lib/rancher/rke2/bin/kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        msg: "{{ cluster_info.stdout_lines }}"
+
+    - name: Display kubeconfig location
+      ansible.builtin.debug:
+        msg: |
+          RKE2 cluster installation completed!
+
+          Kubeconfig has been saved to: /tmp/rke2-kubeconfig.yaml
+
+          To use kubectl from your local machine:
+          1. Copy the kubeconfig: scp {{ ansible_host }}:/etc/rancher/rke2/rke2.yaml ~/.kube/rke2-config
+          2. Update the server address in the kubeconfig to use {{ rke2_api_ip }}:6443
+          3. Export: export KUBECONFIG=~/.kube/rke2-config
+          4. Test: kubectl get nodes

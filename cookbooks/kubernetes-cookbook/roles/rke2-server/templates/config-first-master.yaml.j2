@@ -1,0 +1,54 @@
+# RKE2 Server Configuration - First Master
+token: "{{ rke2_token }}"
+tls-san:
+{% for san in rke2_tls_san %}
+  - "{{ san }}"
+{% endfor %}
+{% for host in groups['master'] %}
+  - "{{ hostvars[host]['ansible_host'] }}"
+  - "{{ host }}"
+{% endfor %}
+
+# Network configuration
+cni: {{ rke2_cni }}
+cluster-cidr: "{{ rke2_cluster_cidr }}"
+service-cidr: "{{ rke2_service_cidr }}"
+cluster-dns: "{{ rke2_cluster_dns }}"
+cluster-domain: "{{ rke2_cluster_domain }}"
+
+# Disable components
+{% if rke2_disable is defined and rke2_disable | length > 0 %}
+disable:
+{% for component in rke2_disable %}
+  - {{ component }}
+{% endfor %}
+{% endif %}
+
+# Node taints
+{% if rke2_server_node_taints is defined and rke2_server_node_taints | length > 0 %}
+node-taint:
+{% for taint in rke2_server_node_taints %}
+  - "{{ taint }}"
+{% endfor %}
+{% endif %}
+
+# Kubelet args
+{% if rke2_kubelet_args is defined and rke2_kubelet_args | length > 0 %}
+kubelet-arg:
+{% for arg in rke2_kubelet_args %}
+  - "{{ arg }}"
+{% endfor %}
+{% endif %}
+
+# Write kubeconfig with proper permissions
+write-kubeconfig-mode: "0644"
+
+# SELinux
+{% if rke2_selinux | default(false) %}
+selinux: true
+{% endif %}
+
+# Private Registry Configuration
+{% if registries is defined and registries | length > 0 %}
+# Registry authentication configured via registries.yaml
+{% endif %}

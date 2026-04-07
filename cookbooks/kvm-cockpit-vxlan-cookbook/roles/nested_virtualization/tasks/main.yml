@@ -1,0 +1,41 @@
+---
+- name: Detect CPU vendor
+  shell: lscpu | grep 'Vendor ID' | awk '{print $3}'
+  register: cpu_vendor
+  changed_when: false
+
+- name: Set module name for Intel
+  set_fact:
+    kvm_module: kvm_intel
+  when: "'Intel' in cpu_vendor.stdout or 'GenuineIntel' in cpu_vendor.stdout"
+
+- name: Set module name for AMD
+  set_fact:
+    kvm_module: kvm_amd
+  when: "'AMD' in cpu_vendor.stdout or 'AuthenticAMD' in cpu_vendor.stdout"
+
+- name: Display CPU vendor and module
+  debug:
+    msg: "CPU Vendor: {{ cpu_vendor.stdout }}, KVM Module: {{ kvm_module }}"
+
+- name: Create modprobe configuration for nested virtualization
+  lineinfile:
+    path: "/etc/modprobe.d/{{ kvm_module }}.conf"
+    line: "options {{ kvm_module }} nested=1"
+    create: yes
+    mode: "0644"
+
+- name: Reload KVM module
+  shell: |
+    modprobe -r {{ kvm_module }}
+    modprobe {{ kvm_module }}
+  ignore_errors: yes
+
+- name: Verify nested virtualization is enabled
+  shell: cat /sys/module/{{ kvm_module }}/parameters/nested
+  register: nested_status
+  changed_when: false
+
+- name: Display nested virtualization status
+  debug:
+    msg: "Nested virtualization: {{ 'Enabled' if nested_status.stdout in ['Y', '1'] else 'Disabled' }}"

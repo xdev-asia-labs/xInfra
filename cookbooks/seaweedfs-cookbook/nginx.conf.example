@@ -1,0 +1,140 @@
+# Nginx Configuration Example for SeaweedFS Reverse Proxy
+# Place this in your external nginx server
+#
+# IMPORTANT: This nginx configuration is for READ-ONLY public access
+# - Public users can download/view files via nginx reverse proxy
+# - Upload/write operations must be done directly to SeaweedFS server from internal network
+#   (bypass nginx completely for uploads)
+
+# Upstream definitions
+upstream seaweedfs_filer {
+    server 10.0.1.10:8888;
+    keepalive 64;
+}
+
+upstream seaweedfs_s3 {
+    server 10.0.1.10:8333;
+    keepalive 64;
+}
+
+# Filer - File System Interface (Read-Only via Public Nginx)
+server {
+    listen 80;
+    server_name filer.yourdomain.com;
+
+    client_max_body_size 0;
+    client_body_timeout 300s;
+
+    location / {
+        # Only allow read operations via public nginx
+        # Upload/modify operations must be done directly to SeaweedFS server from internal network
+        limit_except GET HEAD OPTIONS {
+            deny all;
+        }
+
+        proxy_pass http://seaweedfs_filer;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeout settings for large files
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+        proxy_read_timeout 300;
+    }
+}
+
+# S3 API (Read-Only via Public Nginx)
+server {
+    listen 80;
+    server_name s3.yourdomain.com;
+
+    client_max_body_size 0;
+    client_body_timeout 300s;
+
+    location / {
+        # Only allow read operations via public nginx
+        # Upload operations must be done directly to SeaweedFS server from internal network
+        limit_except GET HEAD OPTIONS {
+            deny all;
+        }
+
+        proxy_pass http://seaweedfs_s3;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # S3 specific headers
+        proxy_pass_request_headers on;
+        
+        # Timeout settings for large uploads
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+        proxy_read_timeout 300;
+        send_timeout 300;
+        
+        # Buffer settings
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}
+
+# Volume Server (Usually for internal use only)
+# Uncomment if you need direct volume access
+# server {
+#     listen 80;
+#     server_name volume.yourdomain.com;
+#
+#     client_max_body_size 0;
+#
+#     location / {
+#         proxy_pass http://seaweedfs_volume;
+#         proxy_http_version 1.1;
+#         proxy_set_header Connection "";
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
+
+# HTTPS Configuration Example (with Let's Encrypt)
+# server {
+#     listen 443 ssl http2;
+#     server_name s3.yourdomain.com;
+#
+#     ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers HIGH:!aNULL:!MD5;
+#     ssl_prefer_server_ciphers on;
+#
+#     client_max_body_size 0;
+#
+#     location / {
+#         proxy_pass http://seaweedfs_s3;
+#         proxy_http_version 1.1;
+#         proxy_set_header Connection "";
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto https;
+#     }
+# }
+#
+# # HTTP to HTTPS redirect
+# server {
+#     listen 80;
+#     server_name s3.yourdomain.com;
+#     return 301 https://$server_name$request_uri;
+# }

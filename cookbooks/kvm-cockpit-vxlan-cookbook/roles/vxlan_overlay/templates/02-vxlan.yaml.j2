@@ -1,0 +1,9 @@
+network:
+  version: 2
+  tunnels:
+    {{ vxlan_interface }}:
+      mode: vxlan
+      id: {{ vxlan_vni }}
+      local: {{ host_ip }}
+      remote: {{ vxlan_remote_ip }}
+      port: {{ vxlan_port }}

@@ -1,0 +1,21 @@
+[Unit]
+Description=SeaweedFS S3 API Gateway
+After=network.target seaweedfs-filer.service
+Requires=seaweedfs-filer.service
+
+[Service]
+Type=simple
+User=seaweedfs
+Group=seaweedfs
+ExecStart={{ seaweedfs_install_dir }}/weed s3 \
+  -ip.bind=0.0.0.0 \
+  -port={{ s3_port }} \
+  -filer={{ s3_filer }} \
+  -config={{ s3_config_dir }}/s3.config.json
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:{{ seaweedfs_log_dir }}/s3.log
+StandardError=append:{{ seaweedfs_log_dir }}/s3.error.log
+
+[Install]
+WantedBy=multi-user.target

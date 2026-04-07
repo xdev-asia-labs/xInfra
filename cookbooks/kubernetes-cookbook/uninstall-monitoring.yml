@@ -1,0 +1,120 @@
+---
+# Uninstall monitoring stack
+# This removes Prometheus, Grafana, and Node Exporter from all nodes
+
+- name: Stop and remove monitoring services from monitoring server
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop monitoring services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - prometheus
+        - grafana-server
+        - node_exporter
+      ignore_errors: true
+
+    - name: Remove monitoring service files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/prometheus.service
+        - /etc/systemd/system/grafana-server.service
+        - /etc/systemd/system/node_exporter.service
+
+    - name: Remove monitoring binaries
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/prometheus
+        - /usr/local/bin/promtool
+        - /usr/local/bin/grafana-server
+        - /usr/local/bin/grafana-cli
+        - /usr/local/bin/node_exporter
+
+    - name: Remove monitoring directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/prometheus
+        - /var/lib/prometheus
+        - /etc/grafana
+        - /var/lib/grafana
+        - /var/log/grafana
+        - /var/lib/rancher/rke2
+
+    - name: Remove monitoring users
+      ansible.builtin.user:
+        name: "{{ item }}"
+        state: absent
+        remove: true
+      loop:
+        - prometheus
+        - grafana
+        - node_exporter
+
+    - name: Remove monitoring group
+      ansible.builtin.group:
+        name: monitoring
+        state: absent
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+- name: Remove Node Exporter from cluster nodes
+  hosts: rke2_cluster
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop Node Exporter service
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Remove Node Exporter service file
+      ansible.builtin.file:
+        path: /etc/systemd/system/node_exporter.service
+        state: absent
+
+    - name: Remove Node Exporter binary
+      ansible.builtin.file:
+        path: /usr/local/bin/node_exporter
+        state: absent
+
+    - name: Remove node_exporter user
+      ansible.builtin.user:
+        name: node_exporter
+        state: absent
+        remove: true
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+- name: Display completion message
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Uninstall complete
+      ansible.builtin.debug:
+        msg:
+          - "╔═══════════════════════════════════════════════════════════════╗"
+          - "║  Monitoring stack has been uninstalled successfully!          ║"
+          - "║                                                                 ║"
+          - "║  Removed:                                                       ║"
+          - "║  ✓ Prometheus                                                   ║"
+          - "║  ✓ Grafana                                                      ║"
+          - "║  ✓ Node Exporter (all nodes)                                   ║"
+          - "║                                                                 ║"
+          - "║  To reinstall: ansible-playbook -i inventory/hosts.yml monitoring.yml  ║"
+          - "╚═══════════════════════════════════════════════════════════════╝"

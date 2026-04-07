@@ -1,0 +1,22 @@
+[Unit]
+Description=SeaweedFS Volume Server
+After=network.target seaweedfs-master.service
+Requires=seaweedfs-master.service
+
+[Service]
+Type=simple
+User=seaweedfs
+Group=seaweedfs
+ExecStart={{ seaweedfs_install_dir }}/weed volume \
+  -dir={{ seaweedfs_data_dir }}/volume \
+  -ip=0.0.0.0 \
+  -port={{ volume_port }} \
+  -max={{ volume_max }} \
+  -mserver={{ volume_mserver }}
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:{{ seaweedfs_log_dir }}/volume.log
+StandardError=append:{{ seaweedfs_log_dir }}/volume.error.log
+
+[Install]
+WantedBy=multi-user.target

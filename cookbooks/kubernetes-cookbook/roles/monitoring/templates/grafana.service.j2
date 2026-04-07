@@ -1,0 +1,21 @@
+[Unit]
+Description=Grafana
+Documentation=https://grafana.com/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=grafana
+Group=monitoring
+ExecStart=/usr/local/bin/grafana-server \
+  --config=/etc/grafana/grafana.ini \
+  --homepath=/var/lib/grafana \
+  web
+
+Restart=always
+RestartSec=5
+WorkingDirectory=/var/lib/grafana
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+*.retry
+*.log
+.vault_pass
+.ansible/
+.env
+inventory/hosts.ini
+group_vars/all.yml

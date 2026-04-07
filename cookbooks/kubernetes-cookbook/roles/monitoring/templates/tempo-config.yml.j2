@@ -1,0 +1,132 @@
+# Grafana Tempo configuration
+# {{ ansible_managed }}
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: info
+
+# Distributor - receives traces from agents
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+    zipkin:
+      endpoint: "0.0.0.0:9411"
+    jaeger:
+      protocols:
+        thrift_http:
+          endpoint: "0.0.0.0:14268"
+        grpc:
+          endpoint: "0.0.0.0:14250"
+        thrift_compact:
+          endpoint: "0.0.0.0:6831"
+
+# Ingester - writes traces to backend
+ingester:
+  max_block_duration: 5m
+  trace_idle_period: 30s
+
+# Compactor - compacts trace blocks
+compactor:
+  compaction:
+    block_retention: {{ tempo_retention_period | default('720h') }}  # 30 days
+
+# Storage - local filesystem
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/lib/tempo/wal
+    local:
+      path: /var/lib/tempo/blocks
+    pool:
+      max_workers: 100
+      queue_depth: 10000
+
+# Querier - enables TraceQL and metrics queries
+querier:
+  frontend_worker:
+    frontend_address: localhost:9095
+  max_concurrent_queries: 20
+  search:
+    query_timeout: 30s
+  trace_by_id:
+    query_timeout: 10s
+
+# Metrics generator - generates RED metrics + local-blocks for TraceQL metrics
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: rke2
+  storage:
+    path: /var/lib/tempo/generator/wal
+    remote_write:
+      - url: http://localhost:9090/api/v1/write
+        send_exemplars: true
+  processor:
+    local_blocks:
+      flush_to_storage: false
+      max_live_traces: 100000
+      complete_block_timeout: 30m
+    service_graphs:
+      dimensions:
+        - service.namespace
+        - service.version
+      enable_client_server_prefix: true
+      peer_attributes:
+        - service.name
+        - server.address
+    span_metrics:
+      dimensions:
+        - service.namespace
+        - http.method
+        - http.status_code
+        - http.route
+        - rpc.method
+        - rpc.service
+      enable_target_info: true
+      filter_policies:
+        - include:
+            match_type: strict
+            attributes:
+              - key: kind
+                value: SPAN_KIND_SERVER
+  traces_storage:
+    path: /var/lib/tempo/generator/traces
+
+# Overrides - global limits
+overrides:
+  defaults:
+    metrics_generator:
+      processors:
+        - service-graphs
+        - span-metrics
+        - local-blocks
+    ingestion:
+      rate_limit_bytes: 15000000  # 15MB/s
+      burst_size_bytes: 20000000  # 20MB
+    global:
+      max_bytes_per_trace: 5000000  # 5MB per trace
+
+# Query frontend - TraceQL metrics API
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+    max_duration: 168h
+  trace_by_id:
+    duration_slo: 5s
+  metrics:
+    max_duration: 168h
+
+# Usage report
+usage_report:
+  reporting_enabled: false

@@ -1,0 +1,32 @@
+---
+# Default variables for monitoring role
+
+# Versions
+prometheus_version: "2.48.1"
+grafana_version: "12.3.2"
+node_exporter_version: "1.7.0"
+
+# Prometheus settings
+prometheus_retention_days: "90d" # Extended retention for 500GB disk
+prometheus_retention_size: "400GB" # Limit to 400GB to leave room for other data
+prometheus_listen_address: "0.0.0.0:9090"
+
+# Grafana settings
+grafana_listen_address: "0.0.0.0"
+grafana_listen_port: 3000
+grafana_admin_user: "admin"
+grafana_admin_password: "admin"
+grafana_secret_key: "SW2YcwTI82maPgjNMDnB0QM99kiewSP9"
+
+# Loki settings
+loki_version: "3.6.5"
+loki_retention_period: "720h" # 30 days
+loki_listen_address: "0.0.0.0:3100"
+
+# Tempo settings (distributed tracing)
+tempo_version: "2.8.3"
+tempo_retention_period: "720h" # 30 days
+tempo_listen_address: "0.0.0.0:3200"
+
+# Node Exporter settings
+node_exporter_listen_address: ":9100"

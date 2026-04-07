@@ -1,0 +1,20 @@
+[Unit]
+Description=SeaweedFS Master
+After=network.target
+
+[Service]
+Type=simple
+User=seaweedfs
+Group=seaweedfs
+ExecStart={{ seaweedfs_install_dir }}/weed master \
+  -mdir={{ seaweedfs_data_dir }}/master \
+  -ip=0.0.0.0 \
+  -port={{ master_port }} \
+  -defaultReplication=000
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:{{ seaweedfs_log_dir }}/master.log
+StandardError=append:{{ seaweedfs_log_dir }}/master.error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,232 @@
+{
+  "id": null,
+  "uid": "monitoring-overview",
+  "title": "Monitoring Overview - RKE2 Cluster",
+  "tags": ["kubernetes", "rke2", "overview"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "title": "Cluster Nodes Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "count(up{job=~\"node_exporter.+\"} == 1) or vector(0)",
+        "legendFormat": "Nodes Up"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "green", "value": 3 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "auto" }
+    },
+    {
+      "title": "Prometheus Targets Up",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "count(up == 1) or vector(0)",
+        "legendFormat": "Up"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "unit": "short"
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "auto" }
+    },
+    {
+      "title": "Targets Down",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "count(up == 0) or vector(0)",
+        "legendFormat": "Down"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+          "unit": "short"
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "auto" }
+    },
+    {
+      "title": "Scrape Duration",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(scrape_duration_seconds)",
+        "legendFormat": "Duration"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] }
+        }
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
+      "title": "CPU Usage by Node (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        "legendFormat": "{% raw %}{{instance}}{% endraw %}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        }
+      }
+    },
+    {
+      "title": "Memory Usage by Node (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+        "legendFormat": "{% raw %}{{instance}}{% endraw %}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        }
+      }
+    },
+    {
+      "title": "Disk Usage by Node (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\", fstype!=\"rootfs\"} / node_filesystem_size_bytes{mountpoint=\"/\", fstype!=\"rootfs\"})) * 100",
+        "legendFormat": "{% raw %}{{instance}}{% endraw %}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        }
+      }
+    },
+    {
+      "title": "Network Traffic by Node",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total{device=~\"eth.+|ens.+\"}[5m]) * 8",
+          "legendFormat": "{% raw %}{{instance}}{% endraw %} RX"
+        },
+        {
+          "expr": "rate(node_network_transmit_bytes_total{device=~\"eth.+|ens.+\"}[5m]) * 8",
+          "legendFormat": "{% raw %}{{instance}}{% endraw %} TX"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "System Load Average (1m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "node_load1",
+        "legendFormat": "{% raw %}{{instance}}{% endraw %}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 15 }
+        }
+      }
+    },
+    {
+      "title": "Node Uptime",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "time() - node_boot_time_seconds",
+        "legendFormat": "{% raw %}{{instance}}{% endraw %}",
+        "instant": true,
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "instance" }, "properties": [{ "id": "custom.width", "value": 200 }] }
+        ]
+      },
+      "transformations": [{
+        "id": "organize",
+        "options": {
+          "excludeByName": { "Time": true, "__name__": true, "job": true },
+          "renameByName": { "instance": "Node", "Value": "Uptime" }
+        }
+      }]
+    },
+    {
+      "title": "Prometheus Targets",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "uid": "prometheus" },
+      "targets": [{
+        "expr": "up",
+        "instant": true,
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ]
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "job" }, "properties": [{ "id": "custom.width", "value": 250 }] }
+        ]
+      },
+      "transformations": [{
+        "id": "organize",
+        "options": {
+          "excludeByName": { "Time": true, "__name__": true },
+          "renameByName": { "job": "Job", "instance": "Target", "Value": "Status" }
+        }
+      }]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

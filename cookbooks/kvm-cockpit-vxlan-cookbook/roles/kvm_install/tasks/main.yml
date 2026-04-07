@@ -1,0 +1,88 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+
+- name: Check if reboot is required
+  stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+
+- name: Display reboot message
+  debug:
+    msg: "Reboot is required after system upgrade"
+  when: reboot_required.stat.exists
+
+- name: Check CPU virtualization support
+  shell: egrep -c '(vmx|svm)' /proc/cpuinfo
+  register: cpu_virt_check
+  changed_when: false
+  failed_when: cpu_virt_check.stdout | int == 0
+
+- name: Display virtualization support
+  debug:
+    msg: "CPU supports hardware virtualization: {{ cpu_virt_check.stdout }} cores"
+
+- name: Install cpu-checker package
+  apt:
+    name: cpu-checker
+    state: present
+
+- name: Check KVM acceleration
+  command: kvm-ok
+  register: kvm_ok_result
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display KVM status
+  debug:
+    msg: "{{ kvm_ok_result.stdout_lines }}"
+
+- name: Install KVM and related packages
+  apt:
+    name: "{{ kvm_packages }}"
+    state: present
+    update_cache: yes
+
+- name: Check KVM modules loaded
+  shell: lsmod | grep kvm
+  register: kvm_modules
+  changed_when: false
+
+- name: Display loaded KVM modules
+  debug:
+    msg: "{{ kvm_modules.stdout_lines }}"
+
+- name: Add users to libvirt and kvm groups
+  user:
+    name: "{{ item }}"
+    groups: libvirt,kvm
+    append: yes
+  loop: "{{ libvirt_users }}"
+
+- name: Enable and start libvirtd service
+  systemd:
+    name: libvirtd
+    enabled: yes
+    state: started
+
+- name: Check libvirtd service status
+  systemd:
+    name: libvirtd
+  register: libvirtd_status
+
+- name: Display libvirtd status
+  debug:
+    msg: "Libvirtd is {{ libvirtd_status.status.ActiveState }}"
+
+- name: Test virsh command
+  command: virsh list --all
+  changed_when: false
+  become_user: "{{ ansible_user }}"

@@ -1,0 +1,20 @@
+---
+# Hostname update disabled - keep existing hostname
+# - name: Update hostname
+#   hostname:
+#     name: "{{ inventory_hostname }}"
+
+- name: Update /etc/hosts with all KVM nodes
+  lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ hostvars[item].host_ip }}\\s+"
+    line: "{{ hostvars[item].host_ip }}       {{ item }}"
+    state: present
+  loop: "{{ groups['kvm_hosts'] }}"
+
+- name: Ensure localhost in /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: "^127.0.0.1"
+    line: "127.0.0.1       localhost"
+    state: present

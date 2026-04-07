@@ -1,0 +1,48 @@
+---
+# RKE2 Container Registry Configuration
+# https://docs.rke2.io/install/containerd_registry_configuration
+
+{% if registry_mirrors is defined and registry_mirrors | length > 0 %}
+mirrors:
+{% for mirror in registry_mirrors %}
+  "{{ mirror }}":
+    endpoint:
+      - "{{ mirror }}"
+{% endfor %}
+{% endif %}
+
+{% set has_configs = (registries is defined and registries | length > 0) or (insecure_registries is defined and insecure_registries | length > 0) %}
+
+{% if has_configs %}
+configs:
+{% if registries is defined and registries | length > 0 %}
+{% for reg in registries %}
+  "{{ reg.url }}":
+{% if reg.username is defined and reg.username != '' %}
+    auth:
+      username: "{{ reg.username }}"
+      password: "{{ reg.password }}"
+{% endif %}
+{% if reg.url in (insecure_registries | default([])) %}
+    tls:
+      insecure_skip_verify: true
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if insecure_registries is defined and insecure_registries | length > 0 %}
+{% for registry in insecure_registries %}
+{% set already_configured = false %}
+{% if registries is defined %}
+{% for reg in registries %}
+{% if registry == reg.url %}{% set already_configured = true %}{% endif %}
+{% endfor %}
+{% endif %}
+{% if not already_configured %}
+  "{{ registry }}":
+    tls:
+      insecure_skip_verify: true
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}

@@ -1,0 +1,30 @@
+---
+- name: Setup KVM with Cockpit and VXLAN on Ubuntu
+  hosts: kvm_hosts
+  become: yes
+
+  roles:
+    - role: common
+      tags: common
+
+    - role: kvm_install
+      tags: kvm
+
+    - role: network_bridge
+      tags: network
+
+    - role: virtual_networks
+      tags: virtual_networks
+
+    - role: vxlan_overlay
+      tags: vxlan
+
+    - role: cockpit
+      tags: cockpit
+
+    - role: storage_pool
+      tags: storage
+
+    - role: nested_virtualization
+      tags: nested
+      when: enable_nested_virt | default(false)
